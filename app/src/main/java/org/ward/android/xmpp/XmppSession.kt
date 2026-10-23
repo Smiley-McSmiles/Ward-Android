@@ -64,6 +64,8 @@ import org.ward.android.util.JidUtil
 import org.ward.android.util.TimeUtil
 import org.ward.omemo2.signal.IdentityKeyPair
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
@@ -1713,26 +1715,62 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         scope.launch { core.dao.updateAccount(account) }
     }
 
-    fun upload(file: File, name: String, mime: String): String? {
-        return try {
-            val conn = connection ?: return null
+    suspend fun upload(file: File, name: String, mime: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val conn = connection ?: return@withContext null
             val mgr = HttpFileUploadManager.getInstanceFor(conn)
             if (!mgr.isUploadServiceDiscovered) {
                 runCatching { mgr.discoverUploadService() }
             }
             if (mgr.getDefaultUploadService() == null) {
-                core.addXmlLog(account.id, false, "HTTP upload service not found by Smack; probing disco#items")
+                core.addXmlLog(account.id, false, "HTTP upload service not found by Smack; probing discovery")
                 ensureUploadService(conn, mgr) ?: run {
                     core.addXmlLog(account.id, false, "No XEP-0363 upload service advertised by this server")
-                    return null
+                    return@withContext null
                 }
             }
             val service = mgr.getDefaultUploadService()
             core.addXmlLog(account.id, false, "HTTP upload via ${service?.address}")
-            mgr.uploadFile(file.inputStream(), name, file.length()).toString()
+            try {
+                mgr.uploadFile(file.inputStream(), name, file.length()).toString()
+            } catch (e: Exception) {
+                // Some servers accept the slot request but reject Smack's HTTP upload setup.
+                // Request a fresh slot and put the bytes directly, which is the same XEP-0363
+                // transaction without Smack's internal URL connection quirks.
+                core.addXmlLog(account.id, false,
+                    "HTTP upload via Smack failed (${e.javaClass.simpleName}: ${e.message}); retrying direct PUT")
+                val slot = mgr.requestSlot(name, file.length(), mime)
+                directPut(slot.putUrl, slot.headers, file)
+                slot.getUrl.toString()
+            }
         } catch (e: Exception) {
             core.addXmlLog(account.id, false, "upload failed: ${e.javaClass.simpleName}: ${e.message}")
             null
+        }
+    }
+
+    private fun directPut(url: URL, headers: Map<String, String>, file: File): String {
+        val http = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "PUT"
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 60_000
+            setFixedLengthStreamingMode(file.length())
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
+            if (headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
+                setRequestProperty("Content-Type", "application/octet-stream")
+            }
+        }
+        try {
+            http.outputStream.use { out -> file.inputStream().use { it.copyTo(out) } }
+            val code = http.responseCode
+            if (code !in 200..299) {
+                val text = runCatching { http.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()
+                throw IllegalStateException("Upload server returned HTTP $code${if (text.isBlank()) "" else ": ${text.take(200)}"}")
+            }
+            return url.toString()
+        } finally {
+            http.disconnect()
         }
     }
 
@@ -1749,26 +1787,36 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         runCatching {
             disco.discoverItems(domain).items.forEach { candidates.add(it.entityID) }
         }
-        runCatching {
-            candidates.add(org.jxmpp.jid.impl.JidCreate.domainBareFrom("upload.${domain}"))
+        for (prefix in listOf("upload", "httpupload", "files", "share")) {
+            runCatching { candidates.add(org.jxmpp.jid.impl.JidCreate.domainBareFrom("$prefix.${domain}")) }
         }
-        for (jid in candidates) {
-            val info = runCatching { disco.discoverInfo(jid) }.getOrNull() ?: continue
-            val v03 = info.containsFeature("urn:xmpp:http:upload:0")
-            val v02 = info.containsFeature("urn:xmpp:http:upload")
-            if (!v03 && !v02) continue
+        fun install(info: org.jivesoftware.smackx.disco.packet.DiscoverInfo): UploadService? {
+            if (!info.containsFeature("urn:xmpp:http:upload:0") &&
+                !info.containsFeature("urn:xmpp:http:upload")) return null
             val service = runCatching {
                 val method = HttpFileUploadManager::class.java
                     .getDeclaredMethod("uploadServiceFrom", org.jivesoftware.smackx.disco.packet.DiscoverInfo::class.java)
                 method.isAccessible = true
                 method.invoke(null, info) as UploadService
-            }.getOrNull() ?: continue
-            runCatching {
-                val field = HttpFileUploadManager::class.java.getDeclaredField("defaultUploadService")
-                field.isAccessible = true
-                field.set(mgr, service)
-            }.getOrThrow()
+            }.getOrNull() ?: return null
+            val field = HttpFileUploadManager::class.java.getDeclaredField("defaultUploadService")
+            field.isAccessible = true
+            field.set(mgr, service)
+            core.addXmlLog(account.id, false, "XEP-0363 service: ${service.address} (${info.from})")
             return service
+        }
+        // Let Smack do the standard server/items walk first.
+        runCatching {
+            disco.findServicesDiscoverInfo("urn:xmpp:http:upload:0", false, false)
+                .firstNotNullOfOrNull { info -> install(info) }
+        }.getOrNull()?.let { return it }
+        runCatching {
+            disco.findServicesDiscoverInfo("urn:xmpp:http:upload", false, false)
+                .firstNotNullOfOrNull { info -> install(info) }
+        }.getOrNull()?.let { return it }
+        for (jid in candidates) {
+            val info = runCatching { disco.discoverInfo(jid) }.getOrNull() ?: continue
+            install(info)?.let { return it }
         }
         return null
     }

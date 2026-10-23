@@ -1,6 +1,7 @@
 package org.ward.android.util
 
 import android.content.Context
+import android.os.SystemClock
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -28,6 +29,7 @@ object AppLockStore {
     private const val KEY_LOCKOUT_UNTIL = "lockout_until"
     private const val ITERATIONS = 120_000
     private const val KEY_BITS = 256
+    @Volatile private var externalUntil = 0L
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -71,6 +73,21 @@ object AppLockStore {
     }
 
     data class Failure(val attempts: Int, val wipe: Boolean, val lockoutUntil: Long)
+
+    /**
+     * The system photo/document picker is a separate activity. It stops Ward briefly, but that
+     * must not arm the lock screen: the user is still in the middle of choosing a file. The
+     * deadline is a safety net in case an activity result is never delivered.
+     */
+    fun beginExternalActivity() {
+        externalUntil = SystemClock.elapsedRealtime() + 90_000L
+    }
+
+    fun endExternalActivity() {
+        externalUntil = 0L
+    }
+
+    fun externalActivityActive(): Boolean = SystemClock.elapsedRealtime() < externalUntil
 
     fun recordFailure(context: Context): Failure {
         val p = prefs(context)

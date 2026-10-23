@@ -61,7 +61,9 @@ class CallManager(private val session: XmppSession) {
     fun current(): CallUiState? = session.core.call.value
 
     fun start(chat: ChatEntity, video: Boolean) {
-        if (session.core.call.value != null) return
+        // An ENDED call has already been torn down and only remains visible until the user
+        // dismisses it. It must not block a new outgoing call.
+        if (session.core.call.value?.let { it.phase != "ENDED" } == true) return
         wantsVideo = video
         if (!ensureFactory()) return
         sid = "ward-" + UUID.randomUUID().toString()
@@ -79,7 +81,8 @@ class CallManager(private val session: XmppSession) {
     }
 
     fun onIncomingPropose(msg: Message, xml: String, id: String) {
-        if (session.core.call.value != null) {
+        // A displayed ENDED call is already torn down; a new incoming call still has to ring.
+        if (session.core.call.value?.let { it.phase != "ENDED" } == true) {
             sendJmi("reject", emptyMap(), to = msg.from?.toString(), id = id)
             return
         }

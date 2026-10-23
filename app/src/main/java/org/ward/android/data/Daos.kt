@@ -58,6 +58,7 @@ interface WardDao {
 
     @Query("SELECT * FROM devices WHERE accountId=:accountId AND jid=:jid ORDER BY deviceId") fun devices(accountId: Long, jid: String): Flow<List<DeviceEntity>>
     @Query("SELECT * FROM devices WHERE accountId=:accountId AND jid=:jid ORDER BY deviceId") suspend fun devicesOnce(accountId: Long, jid: String): List<DeviceEntity>
+    @Query("SELECT * FROM devices WHERE accountId=:accountId ORDER BY jid, deviceId") suspend fun devicesForAccountNow(accountId: Long): List<DeviceEntity>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertDevice(d: DeviceEntity)
     @Query("UPDATE devices SET trust=:trust WHERE accountId=:accountId AND jid=:jid AND deviceId=:deviceId AND protocol=:protocol") suspend fun setTrust(accountId: Long, jid: String, deviceId: Long, protocol: String, trust: String)
 

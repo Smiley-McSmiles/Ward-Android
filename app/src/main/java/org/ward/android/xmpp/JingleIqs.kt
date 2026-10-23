@@ -46,7 +46,7 @@ object JingleIqs {
 
     private class RawJingleProvider : IQProvider<RawJingleIq>() {
         override fun parse(parser: XmlPullParser, initialDepth: Int, xmlEnvironment: XmlEnvironment): RawJingleIq {
-            val raw = PacketParserUtils.parseElement(parser).toString()
+            val raw = PacketParserUtils.parseElement(parser, true).toString()
             return RawJingleIq(raw)
         }
     }

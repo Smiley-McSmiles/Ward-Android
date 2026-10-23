@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.sp
 
 private sealed class Block {
     data class Paragraph(val text: String) : Block()
+    data class Heading(val level: Int, val text: String) : Block()
+    data object Rule : Block()
     data class Code(val lang: String, val text: String) : Block()
     data class Quote(val lines: List<String>) : Block()
     data class Bullet(val items: List<String>) : Block()
@@ -79,6 +81,20 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
                         if (i == 0) HorizontalDivider()
                     }
                 }
+                is Block.Rule -> {
+                    HorizontalDivider(Modifier.padding(vertical = 6.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant)
+                }
+                is Block.Heading -> {
+                    val style = when (b.level) {
+                        1 -> MaterialTheme.typography.headlineSmall
+                        2 -> MaterialTheme.typography.titleLarge
+                        3 -> MaterialTheme.typography.titleMedium
+                        else -> MaterialTheme.typography.titleSmall
+                    }
+                    InlineMarkdown(b.text, color, style,
+                        Modifier.padding(top = if (b.level == 1) 8.dp else 6.dp, bottom = 2.dp))
+                }
                 is Block.Paragraph -> {
                     if (b.text.isNotBlank()) {
                         val emojiOnly = largeEmoji && b.text.length <= 12 && b.text.none { it.isLetterOrDigit() }
@@ -92,11 +108,13 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
 }
 
 @Composable
-private fun InlineMarkdown(text: String, color: Color) {
+private fun InlineMarkdown(text: String, color: Color,
+                          style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.bodyLarge,
+                          modifier: Modifier = Modifier) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     val annotated = inline(text, color, MaterialTheme.colorScheme.primary)
-    ClickableText(annotated, style = MaterialTheme.typography.bodyLarge.copy(color = color),
+    ClickableText(annotated, modifier = modifier, style = style.copy(color = color),
         onClick = { offset ->
             val at = offset.coerceIn(0, (annotated.length - 1).coerceAtLeast(0))
             val code = annotated.getStringAnnotations("CODE", at, at).firstOrNull()
@@ -110,6 +128,16 @@ private fun InlineMarkdown(text: String, color: Color) {
             }
         })
 }
+
+private fun headingMatch(line: String): Pair<Int, String>? {
+    val m = Regex("^\\s{0,3}(#{1,6})\\s+(.+?)\\s*$").find(line) ?: return null
+    val level = m.groupValues[1].length
+    val body = m.groupValues[2].replace(Regex("\\s+#+\\s*$"), "").trim()
+    return if (body.isBlank()) null else level to body
+}
+
+private fun isRule(line: String): Boolean =
+    line.trim().matches(Regex("^(?:-{3,}|\\*{3,}|_{3,})$"))
 
 private fun parseBlocks(text: String): List<Block> {
     val out = mutableListOf<Block>()
@@ -148,11 +176,19 @@ private fun parseBlocks(text: String): List<Block> {
             out.add(Block.Bullet(items))
         } else if (line.isBlank()) {
             i++
+        } else if (isRule(line)) {
+            out.add(Block.Rule)
+            i++
+        } else if (headingMatch(line) != null) {
+            val (level, heading) = headingMatch(line)!!
+            out.add(Block.Heading(level, heading))
+            i++
         } else {
             val p = mutableListOf<String>()
             while (i < lines.size && lines[i].isNotBlank() && !lines[i].trimStart().startsWith("```") &&
                 !lines[i].trimStart().startsWith(">") && !lines[i].trimStart().startsWith("|") &&
-                !lines[i].trimStart().startsWith("- ") && !lines[i].trimStart().startsWith("* ")) {
+                !lines[i].trimStart().startsWith("- ") && !lines[i].trimStart().startsWith("* ") &&
+                headingMatch(lines[i]) == null && !isRule(lines[i])) {
                 p.add(lines[i]); i++
             }
             out.add(Block.Paragraph(p.joinToString("\n")))

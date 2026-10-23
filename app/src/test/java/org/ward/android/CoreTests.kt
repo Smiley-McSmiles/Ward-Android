@@ -10,6 +10,8 @@ import org.junit.Test
 import org.ward.android.util.FileCrypto
 import org.ward.android.xmpp.ExternalServicesIq
 import org.ward.android.xmpp.JingleIqs
+import org.ward.android.xmpp.Omemo2
+import org.ward.android.xmpp.OmemoBackup
 import org.ward.android.xmpp.JingleSdp
 import org.ward.android.xmpp.RawJingleIq
 import org.ward.android.xmpp.OpenPgp
@@ -79,6 +81,10 @@ class CoreTests {
                 "</jingle></iq>")
         assertTrue(iq is RawJingleIq)
         assertTrue((iq as RawJingleIq).xml.contains("semantics='BUNDLE'"))
+        assertTrue(iq.xml.contains("xmlns='urn:xmpp:jingle:apps:rtp:1'"))
+        val sdp = JingleSdp.jingleToSdp(iq.xml, false)
+        assertNotNull(sdp)
+        assertTrue(sdp!!.contains("a=mid:audio0"))
     }
 
     @Test fun externalServiceDiscoveryIqKeepsServicesPayload() {
@@ -94,6 +100,32 @@ class CoreTests {
         assertTrue(payload.contains("services"))
         val request = ExternalServicesIq().toXML(org.jivesoftware.smack.packet.XmlEnvironment.EMPTY).toString()
         assertTrue(request.contains("<services xmlns='urn:xmpp:extdisco:2'"))
+    }
+
+    @Test fun omemoSeedAndGtkFingerprintConversion() {
+        val seed = ByteArray(32) { it.toByte() }
+        val digest = java.security.MessageDigest.getInstance("SHA-512").digest(seed)
+        val priv = digest.copyOfRange(0, 32).also {
+            it[0] = (it[0].toInt() and 248).toByte()
+            it[31] = ((it[31].toInt() and 127) or 64).toByte()
+        }
+        assertEquals("3894eea49c580aef816935762be049559d6d1440dede12e6a125f1841fff8e6f",
+            priv.joinToString("") { "%02x".format(it) })
+        assertEquals("4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01",
+            Omemo2.curveFingerprintFromEdHex("03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"))
+        assertEquals("4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01",
+            Omemo2.curveFingerprintFromEdHex("03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"))
+    }
+
+    @Test fun gtkBackupSealRoundTrip() {
+        val blob = OmemoBackup.seal(mapOf("entries" to listOf(mapOf("jid" to "bob@example.org"))),
+            "correct horse battery staple", "trust")
+        val payload = OmemoBackup.unseal(blob, "correct horse battery staple", "trust")
+        assertEquals("bob@example.org", ((payload["entries"] as List<*>).first() as Map<*, *>)["jid"])
+        try {
+            OmemoBackup.unseal(blob, "wrong", "trust")
+            fail("wrong passphrase must fail")
+        } catch (_: Exception) { }
     }
 
     @Test fun bodylessMessageDoesNotCrashAttachmentParsing() {

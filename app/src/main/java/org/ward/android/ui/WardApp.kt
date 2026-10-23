@@ -17,7 +17,9 @@ import org.ward.android.util.AppLockStore
 fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? = null) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var unlocked by remember { mutableStateOf(!AppLockStore.isEnabled(context)) }
+    var unlocked by remember {
+        mutableStateOf(!AppLockStore.isEnabled(context) || AppLockStore.externalActivityActive())
+    }
     val currentlyUnlocked by rememberUpdatedState(unlocked)
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -25,7 +27,7 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
                 Lifecycle.Event.ON_START -> vm.core.setAppForeground(currentlyUnlocked)
                 Lifecycle.Event.ON_STOP -> {
                     vm.core.setAppForeground(false)
-                    if (AppLockStore.isEnabled(context)) unlocked = false
+                    if (AppLockStore.isEnabled(context) && !AppLockStore.externalActivityActive()) unlocked = false
                 }
                 Lifecycle.Event.ON_DESTROY -> vm.core.setAppForeground(false)
                 else -> {}

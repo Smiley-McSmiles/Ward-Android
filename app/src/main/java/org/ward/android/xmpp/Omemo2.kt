@@ -50,6 +50,25 @@ import org.xml.sax.InputSource
  * Ed25519 form, uses the <keys jid="..."> envelope and encrypts a whole SCE (XEP-0420) payload
  * instead of only the body.
  */
+
+data class Omemo2PreKeySnapshot(
+    val id: Int,
+    val privateKey: ByteArray,
+    val publicKey: ByteArray,
+)
+
+data class Omemo2KeySnapshot(
+    val deviceId: Int,
+    val identityPrivate: ByteArray,
+    val identityPublicEd: ByteArray,
+    val signedPreKeyId: Int,
+    val signedPreKeyPrivate: ByteArray,
+    val signedPreKeyPublic: ByteArray,
+    val signedPreKeySignature: ByteArray,
+    val signedPreKeyTimestamp: Long,
+    val preKeys: List<Omemo2PreKeySnapshot>,
+)
+
 class Omemo2(
     private val core: WardCore,
     private val account: AccountEntity,
@@ -67,6 +86,96 @@ class Omemo2(
         const val VERSION = 4
         private const val MIN_PRE_KEYS = 25
         private const val DEVICE_CACHE_MS = 5 * 60_000L
+        /**
+         * Write an OMEMO 2 state file from keys parsed out of a Ward GTK device backup.
+         * Session records are intentionally not carried across the two serialization formats;
+         * contacts will establish new ratchets on the next message.
+         */
+        fun identityPublicEd(privateKey: ByteArray): ByteArray {
+            val base = ByteArray(32).also { it[0] = 9 }
+            val pub = Curve25519.getInstance(Curve25519.BEST).calculateAgreement(privateKey, base)
+            val pair = IdentityKeyPair(
+                IdentityKey(Curve.decodePointMont(pub, 0)),
+                Curve.decodePrivatePoint(privateKey)
+            )
+            val ed = pair.publicKey.publicKey.serializeEd().copyOf()
+            val sig = Curve25519.getInstance(Curve25519.BEST)
+                .calculateSignature(privateKey, ByteArray(32))
+            ed[31] = ((ed[31].toInt() and 0x7f) or (sig[63].toInt() and 0x80)).toByte()
+            return ed
+        }
+
+        /** Ed25519 compressed public key -> Curve25519 u-coordinate hex used by GTK trust files. */
+        fun curveFingerprintFromEdHex(hex: String): String {
+            val ed = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            require(ed.size == 32) { "bad Ed25519 key" }
+            ed[31] = (ed[31].toInt() and 0x7f).toByte()
+            val p = java.math.BigInteger.ONE.shiftLeft(255).subtract(java.math.BigInteger.valueOf(19))
+            val y = java.math.BigInteger(1, ed.reversedArray())
+            val u = java.math.BigInteger.ONE.add(y).multiply(
+                java.math.BigInteger.ONE.subtract(y).mod(p).modInverse(p)
+            ).mod(p)
+            val raw = u.toByteArray().let { b ->
+                when {
+                    b.size == 32 -> b.reversedArray()
+                    b.size < 32 -> ByteArray(32 - b.size) + b.reversedArray()
+                    else -> b.copyOfRange(b.size - 32, b.size).reversedArray()
+                }
+            }
+            return raw.joinToString("") { "%02x".format(it) }
+        }
+
+        fun writeImportedState(core: WardCore, account: AccountEntity, snapshot: Omemo2KeySnapshot) {
+            val base = ByteArray(32).also { it[0] = 9 }
+            val pub = Curve25519.getInstance(Curve25519.BEST).calculateAgreement(snapshot.identityPrivate, base)
+            val pair = IdentityKeyPair(
+                IdentityKey(Curve.decodePointMont(pub, 0)),
+                Curve.decodePrivatePoint(snapshot.identityPrivate)
+            )
+            val ed = identityPublicEd(snapshot.identityPrivate)
+            val spkPair = Curve.decodePointMont(snapshot.signedPreKeyPublic, 0) to
+                Curve.decodePrivatePoint(snapshot.signedPreKeyPrivate)
+            val spk = SignedPreKeyRecord(
+                snapshot.signedPreKeyId,
+                snapshot.signedPreKeyTimestamp,
+                org.ward.omemo2.signal.ecc.ECKeyPair(spkPair.first, spkPair.second),
+                snapshot.signedPreKeySignature
+            )
+            val pre = LinkedHashMap<Int, PreKeyRecord>()
+            for (p in snapshot.preKeys) {
+                val pair2 = org.ward.omemo2.signal.ecc.ECKeyPair(
+                    Curve.decodePointMont(p.publicKey, 0),
+                    Curve.decodePrivatePoint(p.privateKey)
+                )
+                pre[p.id] = PreKeyRecord(p.id, pair2)
+            }
+            // The legacy store compares its serialized IdentityKeyPair with Disk.legacyIdentity.
+            // Use the legacy class here as well; the Dino fork and libsignal serializers differ.
+            val legacyPublic = org.whispersystems.libsignal.ecc.Curve.decodePoint(
+                byteArrayOf(0x05) + Curve25519.getInstance(Curve25519.BEST)
+                    .calculateAgreement(snapshot.identityPrivate, base), 0)
+            val legacyPair = org.whispersystems.libsignal.IdentityKeyPair(
+                org.whispersystems.libsignal.IdentityKey(legacyPublic),
+                org.whispersystems.libsignal.ecc.Curve.decodePrivatePoint(snapshot.identityPrivate)
+            )
+            val disk = Disk(
+                identity = Base64.getEncoder().encodeToString(pair.serialize()),
+                edIdentity = Base64.getEncoder().encodeToString(ed),
+                legacyIdentity = Base64.getEncoder().encodeToString(legacyPair.serialize()),
+                deviceId = snapshot.deviceId,
+                registrationId = snapshot.deviceId,
+                signedPreKeys = mutableMapOf(snapshot.signedPreKeyId.toString() to
+                    Base64.getEncoder().encodeToString(spk.serialize())),
+                preKeys = pre.entries.associate { it.key.toString() to
+                    Base64.getEncoder().encodeToString(it.value.serialize()) }.toMutableMap(),
+                nextPreKeyId = (pre.keys.maxOrNull() ?: 0) + 1,
+                cleanupVersion = 1
+            )
+            val dir = File(core.context.filesDir, "omemo2/${account.id}")
+            dir.mkdirs()
+            File(dir, "state.json").writeText(Gson().toJson(disk))
+        }
+
     }
 
     data class Content(
@@ -1014,4 +1123,22 @@ class Omemo2(
     }
     private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     private fun b64(b: ByteArray) = Base64.getEncoder().encodeToString(b)
+    /** All long-lived OMEMO 2 key material, for GTK-compatible device backups. */
+    fun snapshotKeys(): Omemo2KeySnapshot = synchronized(lock) {
+        val spk = signedPreKeys.values.maxByOrNull { it.id } ?: signedPreKey()
+        Omemo2KeySnapshot(
+            deviceId = deviceId,
+            identityPrivate = identity.privateKey.serialize(),
+            identityPublicEd = edIdentity,
+            signedPreKeyId = spk.id,
+            signedPreKeyPrivate = spk.keyPair.privateKey.serialize(),
+            signedPreKeyPublic = spk.keyPair.publicKey.serialize2(),
+            signedPreKeySignature = spk.signature2.takeIf { it.isNotEmpty() } ?: spk.signature,
+            signedPreKeyTimestamp = spk.timestamp,
+            preKeys = preKeys.entries.sortedBy { it.key }.map { (id, record) ->
+                Omemo2PreKeySnapshot(id, record.keyPair.privateKey.serialize(), record.keyPair.publicKey.serialize2())
+            }
+        )
+    }
+
 }

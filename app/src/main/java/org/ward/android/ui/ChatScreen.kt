@@ -58,6 +58,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.ward.android.data.*
 import org.ward.android.parseReactions
+import org.ward.android.util.AppLockStore
 import org.ward.android.util.Colors
 import org.ward.android.util.TimeUtil
 import org.ward.android.xmpp.OccupantInfo
@@ -92,6 +93,7 @@ fun ChatScreen(vm: AppViewModel) {
     var text by remember(c.id) { mutableStateOf(c.draft) }
     var initialized by remember(c.id) { mutableStateOf(false) }
     val attach = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        AppLockStore.endExternalActivity()
         if (uri != null) vm.sendFile(uri)
     }
     var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
@@ -244,7 +246,7 @@ fun ChatScreen(vm: AppViewModel) {
                     else vm.send(text, replyTo)
                     replyTo = null; text = ""
                 },
-                onAttach = { attach.launch("*/*") },
+                onAttach = { AppLockStore.beginExternalActivity(); attach.launch("*/*") },
                 recording = recorder != null,
                 sendWithEnter = (appSettings["chats.send_with"] ?: "enter") == "enter",
                 onVoice = {
@@ -422,7 +424,10 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                             AttachmentView(vm, a)
                             Spacer(Modifier.height(4.dp))
                         }
-                        if (m.body.isNotBlank()) MarkdownText(m.body, largeEmoji = vm.settings.bool("appearance.large_emoji"))
+                        val attachmentNames = atts.mapNotNull { it["name"] as? String }
+                        if (m.body.isNotBlank() && m.body !in attachmentNames) {
+                            MarkdownText(m.body, largeEmoji = vm.settings.bool("appearance.large_emoji"))
+                        }
                         if (m.kind == "me") { /* already rendered with /me prefix */ }
                     }
                     Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {

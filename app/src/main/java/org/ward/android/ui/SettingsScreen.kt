@@ -230,6 +230,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
     val context = LocalContext.current
     if (acc == null) { onBack(); return }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        org.ward.android.util.AppLockStore.endExternalActivity()
         if (uri != null) {
             runCatching {
                 val file = File(context.filesDir, "profile-${acc.id}-${System.currentTimeMillis()}.jpg")
@@ -261,7 +262,10 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
                 Avatar(acc.displayName, 76, acc.color, photo = acc.avatar)
                 Spacer(Modifier.width(16.dp))
                 Column {
-                    Button(onClick = { pickPhoto.launch("image/*") }) { Text("Choose photo") }
+                    Button(onClick = {
+                        org.ward.android.util.AppLockStore.beginExternalActivity()
+                        pickPhoto.launch("image/*")
+                    }) { Text("Choose photo") }
                     Text("Published with your XMPP profile", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
