@@ -786,7 +786,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         val e = MessageEntity(chatId = chat.id, stanzaId = id, originId = msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: "",
             sender = from, senderJid = from, senderName = (core.dao.contact(account.id, from)?.name ?: JidUtil.nick(from)),
             direction = 0, timestamp = System.currentTimeMillis(), kind = "system", encryption = "omemo2",
-            body = "Could not decrypt this OMEMO 2 message. The sender's device may not be trusted yet, or the encrypted session is out of sync. Ask the sender to reset their OMEMO session.")
+            body = "Could not decrypt this OMEMO 2 message. The encrypted session or identity did not match. Check the XML console for the specific error.")
         val lid = core.dao.insertMessage(e)
         if (lid >= 0) core.touchChat(chat, e.copy(id = lid), outgoing = false)
     }

@@ -6,6 +6,7 @@ import kotlinx.coroutines.launch
 import org.jivesoftware.smack.XMPPConnection
 import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.Message
+import org.jivesoftware.smack.packet.StanzaBuilder
 import org.jivesoftware.smack.packet.XmlEnvironment
 import org.jivesoftware.smackx.pubsub.PubSubManager
 import org.jivesoftware.smackx.pubsub.packet.PubSub
@@ -27,6 +28,7 @@ import org.ward.omemo2.signal.ratchet.AliceSignalProtocolParameters
 import org.ward.omemo2.signal.ratchet.RatchetingSession
 import org.ward.omemo2.signal.util.KeyHelper
 import org.ward.omemo2.signal.util.guava.Optional as SignalOptional
+import org.whispersystems.curve25519.Curve25519
 import java.io.File
 import java.io.StringReader
 import java.security.MessageDigest
@@ -141,7 +143,8 @@ class Omemo2(
             val storedEd = runCatching { disk.edIdentity.takeIf { it.isNotBlank() }?.let { Base64.getDecoder().decode(it) } }.getOrNull()
             val legacyB64 = legacyIdentity?.let { b64(it) }
             val mustMigrate = legacyIdentity != null && disk.legacyIdentity != legacyB64
-            identity = when {
+            val oldEd = disk.edIdentity
+            val chosenIdentity = when {
                 // OMEMO 2 and legacy OMEMO must share one identity key: Ward/omemo stores a single
                 // identity per device id, derived from the legacy bundle's Ed25519 sign bit.
                 legacyIdentity != null -> IdentityKeyPair(legacyIdentity)
@@ -150,7 +153,19 @@ class Omemo2(
                         .getOrElse { storedIdentity }
                 else -> storedIdentity ?: KeyHelper.generateIdentityKeyPair()
             }
+            identity = IdentityKeyPair(
+                IdentityKey(Curve.decodePointEd(edPublicKey(chosenIdentity), 0)),
+                chosenIdentity.privateKey
+            )
             edIdentity = identity.publicKey.publicKey.serializeEd()
+            // The sign bit is part of the Ed25519 identity. If it changed, old sessions and
+            // unacknowledged key exchanges belong to the previous public key and must not be
+            // reused. A fresh key exchange is safer than a mixed session.
+            val edChanged = oldEd.isNotBlank() && oldEd != b64(edIdentity)
+            if (edChanged) {
+                sessions.clear()
+                disk.sessions.clear()
+            }
             disk.identity = b64(identity.serialize())
             disk.edIdentity = b64(edIdentity)
             if (legacyB64 != null) disk.legacyIdentity = legacyB64
@@ -204,6 +219,27 @@ class Omemo2(
     }
 
     // ---------------------------------------------------------------- persistence
+    /**
+     * Dino's Curve.montToEd() always returns the sign-0 representative of an Ed25519 public key.
+     * libsignal's signature carries the real sign bit in the high bit of the last signature byte.
+     * Recover it so the OMEMO 2 identity is exactly the key the legacy bundle already announced.
+     */
+    private fun edPublicKey(pair: IdentityKeyPair): ByteArray {
+        val ed = pair.publicKey.publicKey.serializeEd().copyOf()
+        val sig = Curve25519.getInstance(Curve25519.BEST)
+            .calculateSignature(pair.privateKey.serialize(), ByteArray(32))
+        ed[31] = ((ed[31].toInt() and 0x7f) or (sig[63].toInt() and 0x80)).toByte()
+        return ed
+    }
+
+    /** Ed25519 signature with the XEdDSA sign-bit marker cleared, as OMEMO 2 bundle signatures use. */
+    private fun edSign(message: ByteArray): ByteArray {
+        val sig = Curve25519.getInstance(Curve25519.BEST)
+            .calculateSignature(identity.privateKey.serialize(), message)
+        sig[63] = (sig[63].toInt() and 0x7f).toByte()
+        return sig
+    }
+
     private fun save() {
         disk.signedPreKeys = signedPreKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
         disk.preKeys = preKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
@@ -249,12 +285,22 @@ class Omemo2(
 
     override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): Boolean {
         synchronized(lock) {
-            val old = identities[key(address)]
-            identities[key(address)] = identityKey
-            disk.identities[key(address)] = b64(identityKey.publicKey.serializeEd())
+            val k = key(address)
+            val old = identities[k]
+            identities[k] = identityKey
+            disk.identities[k] = b64(identityKey.publicKey.serializeEd())
+            val changed = old != null && !old.equals(identityKey)
+            if (changed) {
+                val btbv = core.settings.string("encryption.trust", "btbv") == "btbv"
+                // In blind-trust mode a rotated identity must not brick the conversation
+                // permanently. Manual trust still refuses it until the device is forgotten or
+                // explicitly verified.
+                trusted[k] = btbv
+                core.addXmlLog(account.id, false,
+                    "OMEMO 2 identity changed for ${address.name}/${address.deviceId}; blind trust=$btbv")
+            }
             save()
-            if (old != null && !old.equals(identityKey)) trusted[key(address)] = false
-            return old != null && !old.equals(identityKey)
+            return changed
         }
     }
 
@@ -264,8 +310,9 @@ class Omemo2(
             val k = key(address)
             if (trusted[k] == false) return false
             val old = identities[k]
-            if (old != null && !old.equals(identityKey)) return false
-            if (core.settings.string("encryption.trust", "btbv") == "btbv") return true
+            val btbv = core.settings.string("encryption.trust", "btbv") == "btbv"
+            if (old != null && !old.equals(identityKey) && !btbv) return false
+            if (btbv) return true
             return trusted[k] == true
         }
     }
@@ -374,7 +421,7 @@ class Omemo2(
                 val spk = signedPreKey()
                 val bundleXml = "<publish node='$BUNDLES'><item id='$deviceId'><bundle xmlns='$NS'>" +
                     "<spk id='${spk.id}'>${b64(spk.keyPair.publicKey.serialize2())}</spk>" +
-                    "<spks>${b64(spk.signature2)}</spks>" +
+                    "<spks>${b64(edSign(spk.keyPair.publicKey.serialize2()))}</spks>" +
                     "<ik>${b64(edIdentity)}</ik><prekeys>" +
                     preKeys.entries.joinToString("") { (id, p) -> "<pk id='$id'>${b64(p.keyPair.publicKey.serialize2())}</pk>" } +
                     "</prekeys></bundle></item></publish>"
@@ -448,6 +495,10 @@ class Omemo2(
         val id = (signedPreKeys.keys.maxOrNull() ?: 0) + 1
         val spk = KeyHelper.generateSignedPreKey(identity, id)
         signedPreKeys[id] = spk
+        // Keep the current key and one predecessor for messages that were in flight during the
+        // rotation. Older signed pre-keys are no longer needed and weaken forward secrecy.
+        val keep = signedPreKeys.keys.sorted().takeLast(2).toSet()
+        signedPreKeys.keys.removeIf { it !in keep }
         save()
         return spk
     }
@@ -466,8 +517,10 @@ class Omemo2(
             }
             // Ward (and some older clients) can have a stale OMEMO 2 device list that omits the
             // device whose bundle is actually published. Bundle items are authoritative enough for
-            // us to start a session, so merge their item ids into the advertised list.
-            val bundled = runCatching {
+            // us to start a session with a contact, so merge their item ids into the contact's
+            // list. Never merge bundle ids into our own list: that would re-advertise a device that
+            // was deliberately removed while its old bundle item still exists.
+            val bundled = if (bareJid == account.jid) emptyList() else runCatching {
                 val bundleNode = PubSubManager.getInstanceFor(conn,
                     org.jxmpp.jid.impl.JidCreate.entityBareFrom(bareJid)).getLeafNode(BUNDLES)
                 val bundleItems: List<org.jivesoftware.smackx.pubsub.Item> = bundleNode.getItems()
@@ -595,7 +648,14 @@ class Omemo2(
     // ---------------------------------------------------------------- public operations
     fun encrypt(toBare: String, body: String): String? = encryptContent(toBare, bodyXml(body))
 
-    fun encryptContent(toBare: String, contentXml: String): String? = synchronized(lock) {
+    fun encryptContent(toBare: String, contentXml: String): String? =
+        encryptMessage(toBare, contentXml, includePayload = true)
+
+    /** A key-exchange acknowledgement: key material only, with no <payload>. */
+    private fun encryptEmpty(toBare: String): String? =
+        encryptMessage(toBare, "", includePayload = false)
+
+    private fun encryptMessage(toBare: String, contentXml: String, includePayload: Boolean): String? = synchronized(lock) {
         if (!published && !publish()) return null
         val recipients = LinkedHashMap<String, MutableList<Int>>()
         var contactDevices = 0
@@ -615,7 +675,9 @@ class Omemo2(
             }
         }
         if (recipients.isEmpty()) return null
-        val (ct, keyMaterial) = encryptPayload(envelope(contentXml, toBare))
+        val (ct, keyMaterial) = encryptPayload(
+            if (includePayload) envelope(contentXml, toBare) else ByteArray(0)
+        )
         val sb = StringBuilder("<encrypted xmlns='$NS'><header sid='$deviceId'>")
         for ((jid, list) in recipients) {
             sb.append("<keys jid='").append(escape(jid)).append("'>")
@@ -633,14 +695,20 @@ class Omemo2(
             }
             sb.append("</keys>")
         }
-        sb.append("</header><payload>").append(b64(ct)).append("</payload></encrypted>")
+        sb.append("</header>")
+        if (includePayload) sb.append("<payload>").append(b64(ct)).append("</payload>")
+        sb.append("</encrypted>")
         sb.toString()
     }
 
     private fun ensureSession(bareJid: String, devId: Int): Boolean {
         val address = SignalProtocolAddress(bareJid, devId)
         val existing = sessions[key(address)]
-        if (existing != null && !existing.isFresh) return true
+        // SessionRecord.isFresh stays true for a record created in memory until it is reloaded
+        // from disk. Checking the sender chain tells us whether the ratchet was actually
+        // initialized, so a normal second message does not start another X3DH exchange (and reuse
+        // a one-time pre-key that the peer has already consumed).
+        if (existing != null && existing.sessionState.hasSenderChain()) return true
         val bundle = fetchBundle(bareJid, devId) ?: return false
         return try {
             if (!verifyBundleSignature(bundle)) throw InvalidKeyException("Invalid OMEMO 2 signed pre key signature")
@@ -696,48 +764,59 @@ class Omemo2(
         storeSession(address, record)
     }
 
-    fun decrypt(msg: Message, raw: String): Content? {
+    fun decrypt(msg: Message, raw: String): Content? = synchronized(lock) {
         val encrypted = msg.getExtensionElement("encrypted", NS) as? org.jivesoftware.smack.packet.StandardExtensionElement
-            ?: return decryptDom(msg, raw)
-        val keys = encrypted.getElements("keys")
-        val ours = keys.firstOrNull { it.getAttributeValue("jid")?.substringBefore('/') == account.jid } ?: return null
-        val keyEl = ours.getElements("key").firstOrNull { it.getAttributeValue("rid")?.toIntOrNull() == deviceId } ?: return null
-        val blob = runCatching { Base64.getDecoder().decode(keyEl.text?.trim() ?: return null) }.getOrNull() ?: return null
-        var kex = keyEl.getAttributeValue("kex") == "true"
+            ?: return@synchronized decryptDom(msg, raw)
+        // OMEMO 2 nests <keys> inside <header>. StandardExtensionElement.getElements() only
+        // returns direct children, so asking <encrypted> for <keys> always produced an empty list.
+        val header = encrypted.getElements("header").firstOrNull()
+            ?: return@synchronized decryptDom(msg, raw)
+        val keys = header.getElements("keys")
+        val ours = keys.firstOrNull { it.getAttributeValue("jid")?.substringBefore('/') == account.jid }
+            ?: return@synchronized null
+        val keyEl = ours.getElements("key").firstOrNull {
+            it.getAttributeValue("rid")?.toIntOrNull() == deviceId
+        } ?: return@synchronized null
+        val blob = runCatching { Base64.getDecoder().decode(keyEl.text?.trim() ?: return@synchronized null) }
+            .getOrNull() ?: return@synchronized null
+        val kex = keyEl.getAttributeValue("kex") == "true" || keyEl.getAttributeValue("kex") == "1"
         val senderBare = msg.from?.asEntityBareJidIfPossible()?.toString() ?: account.jid
         // The sender's device id is in the <header sid>.
-        val header = encrypted.getElements("header").firstOrNull()
         val senderDev = header?.getAttributeValue("sid")?.toIntOrNull() ?: 0
         val address = SignalProtocolAddress(senderBare, senderDev)
         val toJid = msg.to?.asEntityBareJidIfPossible()?.toString() ?: account.jid
-        return try {
+        try {
             val cipher = SessionCipher(this, address).also { it.setVersion(VERSION) }
+            var usedPreKey: Int? = null
             val keyMaterial = if (kex) {
                 val pk = PreKeySignalMessage(blob, VERSION)
-                val usedPreKey = pk.preKeyId
-                val out = cipher.decrypt(pk)
-                usedPreKey?.takeIf { it.isPresent }?.get()?.let { id ->
-                    removePreKey(id)
-                    addPreKey()
-                    published = false
-                    runCatching { publish() }
-                }
-                out
+                usedPreKey = pk.preKeyId?.takeIf { it.isPresent }?.get()
+                cipher.decrypt(pk)
             } else {
-                try { cipher.decrypt(SignalMessage(blob, true)) }
-                catch (e: Exception) {
-                    // Tolerate senders that omit kex='true' on a key exchange.
-                    val pk = PreKeySignalMessage(blob, VERSION)
-                    val out = cipher.decrypt(pk)
-                    pk.preKeyId?.takeIf { it.isPresent }?.get()?.let { id ->
-                        removePreKey(id); addPreKey(); published = false; runCatching { publish() }
+                var signalFailure: Exception? = null
+                try {
+                    cipher.decrypt(SignalMessage(blob, true))
+                } catch (e: Exception) {
+                    // Tolerate senders that omit kex='true' on a key exchange, but do not hide
+                    // the original SignalMessage error if the key-exchange fallback also fails.
+                    signalFailure = e
+                    try {
+                        val pk = PreKeySignalMessage(blob, VERSION)
+                        usedPreKey = pk.preKeyId?.takeIf { it.isPresent }?.get()
+                        cipher.decrypt(pk)
+                    } catch (e2: Exception) {
+                        val primary = signalFailure
+                        core.addXmlLog(account.id, true,
+                            "OMEMO 2 decrypt failed from $senderBare/$senderDev: " +
+                                "signal=${primary?.javaClass?.name}: ${primary?.message}; " +
+                                "keyExchange=${e2.javaClass.name}: ${e2.message}\n${e2.stackTraceToString()}")
+                        return@synchronized null
                     }
-                    out
                 }
             }
             val payload = encrypted.getElements("payload").firstOrNull()?.text?.trim()
             val trust = trustOf(address)
-            if (payload.isNullOrBlank()) {
+            val content = if (payload.isNullOrBlank()) {
                 Content("", senderDev, trust, emptyList(), true)
             } else {
                 val ct = Base64.getDecoder().decode(payload)
@@ -745,9 +824,40 @@ class Omemo2(
                 val (body, children) = parseEnvelope(String(plain, Charsets.UTF_8), senderBare, toJid)
                 Content(body, senderDev, trust, children, false)
             }
+            val preKeyToDelete = usedPreKey
+            if (preKeyToDelete != null) {
+                // Do not burn the one-time pre-key until the payload and SCE envelope have also
+                // authenticated successfully. A failed message must not consume a pre-key.
+                removePreKey(preKeyToDelete)
+                addPreKey()
+                published = false
+                runCatching { publish() }
+                sendEmptyConfirmation(senderBare)
+            }
+            content
         } catch (e: Exception) {
             core.addXmlLog(account.id, true, "OMEMO 2 decrypt failed from $senderBare/$senderDev: ${e.stackTraceToString()}")
             null
+        }
+    }
+
+    /**
+     * XEP-0384 asks for an empty OMEMO message after a key exchange so the sender can confirm the
+     * session. Without it the peer may keep attaching key exchange material to every message.
+     */
+    private fun sendEmptyConfirmation(toJid: String) {
+        if (toJid == account.jid) return
+        runCatching {
+            val xml = encryptEmpty(toJid) ?: return
+            // Do not answer a key exchange with another key exchange. If this would start a new
+            // session, leave it alone rather than risking a handshake ping-pong.
+            if (xml.contains(" kex='true'")) return
+            val msg = StanzaBuilder.buildMessage().ofType(Message.Type.chat).to(toJid)
+                .addExtension(RawExtension("encrypted", NS, xml)).build()
+            conn.sendStanza(msg)
+            core.addXmlLog(account.id, false, "OMEMO 2 session confirmation sent to $toJid")
+        }.onFailure {
+            core.addXmlLog(account.id, false, "OMEMO 2 confirmation to $toJid failed: ${it.message}")
         }
     }
 
@@ -765,7 +875,7 @@ class Omemo2(
                 val ke = keyEls.item(j) as? Element ?: continue
                 if (ke.getAttribute("rid").toIntOrNull() != deviceId) continue
                 val blob = runCatching { Base64.getDecoder().decode(ke.textContent.trim()) }.getOrNull() ?: continue
-                val kex = ke.getAttribute("kex") == "true"
+                val kex = ke.getAttribute("kex") == "true" || ke.getAttribute("kex") == "1"
                 val sid = (enc.getElementsByTagNameNS(NS, "header").item(0) as? Element)?.getAttribute("sid")?.toIntOrNull() ?: 0
                 val senderBare = msg.from?.asEntityBareJidIfPossible()?.toString() ?: account.jid
                 val toJid = msg.to?.asEntityBareJidIfPossible()?.toString() ?: account.jid
