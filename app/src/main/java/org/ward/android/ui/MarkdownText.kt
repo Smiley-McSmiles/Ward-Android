@@ -5,13 +5,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -39,10 +40,20 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
         for (b in blocks) {
             when (b) {
                 is Block.Code -> {
+                    val context = LocalContext.current
                     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text(b.text.trimEnd(), fontFamily = FontFamily.Monospace, fontSize = 13.sp,
-                            modifier = Modifier.padding(10.dp), color = color)
+                        Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.Top) {
+                            Text(b.text.trimEnd(), fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                                modifier = Modifier.weight(1f).padding(vertical = 6.dp), color = color)
+                            IconButton(onClick = {
+                                context.copyText(b.text)
+                                android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Filled.ContentCopy, "Copy code")
+                            }
+                        }
                     }
                 }
                 is Block.Quote -> Row(Modifier.padding(vertical = 2.dp)) {
@@ -83,11 +94,19 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
 @Composable
 private fun InlineMarkdown(text: String, color: Color) {
     val uri = LocalUriHandler.current
+    val context = LocalContext.current
     val annotated = inline(text, color, MaterialTheme.colorScheme.primary)
-    Text(annotated, style = MaterialTheme.typography.bodyLarge, color = color,
-        modifier = Modifier.clickable {
-            annotated.getStringAnnotations("URL", 0, annotated.length).firstOrNull()?.let { a ->
-                runCatching { uri.openUri(a.item) }
+    ClickableText(annotated, style = MaterialTheme.typography.bodyLarge.copy(color = color),
+        onClick = { offset ->
+            val at = offset.coerceIn(0, (annotated.length - 1).coerceAtLeast(0))
+            val code = annotated.getStringAnnotations("CODE", at, at).firstOrNull()
+            if (code != null) {
+                context.copyText(code.item)
+                android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                annotated.getStringAnnotations("URL", at, at).firstOrNull()?.let { a ->
+                    runCatching { uri.openUri(a.item) }
+                }
             }
         })
 }
@@ -173,7 +192,11 @@ private fun appendInline(b: AnnotatedString.Builder, src: String, base: SpanStyl
         if (c == '`') {
             val end = src.indexOf('`', i + 1)
             if (end > i + 1) {
-                append(src.substring(i + 1, end), merge(base, codeStyle)); i = end + 1; continue
+                val inner = src.substring(i + 1, end)
+                val start = b.length
+                append(inner, merge(base, codeStyle))
+                b.addStringAnnotation("CODE", inner, start, b.length)
+                i = end + 1; continue
             }
         }
         // [label](url)

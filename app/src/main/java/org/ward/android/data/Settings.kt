@@ -24,7 +24,7 @@ data class SettingSpec(
 
 object SettingsSchema {
     val pages = listOf(
-        "general" to "General", "appearance" to "Appearance", "chats" to "Chats", "calls" to "Calls",
+        "general" to "General", "security" to "Security", "appearance" to "Appearance", "chats" to "Chats", "calls" to "Calls",
         "notifications" to "Notifications", "accounts" to "Accounts", "encryption" to "Encryption",
         "storage" to "Storage", "advanced" to "Advanced"
     )
@@ -50,7 +50,7 @@ object SettingsSchema {
         b("general.battery_optimization", "Battery optimization help", "Ask Android not to stop Ward in the background", "general", "Running", true),
 
         c("appearance.style", "Style", "", "appearance", "Colours", "system", "system" to "Follow system", "light" to "Light", "dark" to "Dark"),
-        c("appearance.accent", "Accent colour", "", "appearance", "Colours", "system", "system" to "Follow system", "blue" to "Blue", "teal" to "Teal", "green" to "Green", "yellow" to "Yellow", "orange" to "Orange", "red" to "Red", "pink" to "Pink", "purple" to "Purple", "slate" to "Slate"),
+        c("appearance.accent", "Accent colour", "", "appearance", "Colours", "blue", "blue" to "Blue", "teal" to "Teal", "green" to "Green", "yellow" to "Yellow", "orange" to "Orange", "red" to "Red", "pink" to "Pink", "purple" to "Purple", "slate" to "Slate"),
         b("appearance.nick_colors", "Coloured nicknames", "The same colour for a person as in Conversations and Dino", "appearance", "Colours", true),
         i("appearance.text_scale", "Text size", "", "appearance", "Text", 100, 80, 200, 10, "%"),
         c("appearance.line_spacing", "Line spacing", "", "appearance", "Text", "normal", "compact" to "Compact", "normal" to "Normal", "relaxed" to "Relaxed"),
@@ -68,7 +68,7 @@ object SettingsSchema {
         t("appearance.message_font", "Message font", "Empty uses the system font", "appearance", "Text", "", true),
         t("appearance.code_font", "Code font", "Empty uses the system monospace font", "appearance", "Text", "", true),
 
-        c("chats.send_with", "Send with", "The other key combination adds a new line", "chats", "Writing", "enter", "enter" to "Enter", "ctrl_enter" to "Ctrl+Enter"),
+        c("chats.send_with", "Send with", "Choose whether Enter sends or starts a new line", "chats", "Writing", "enter", "enter" to "Enter sends", "newline" to "Enter adds a new line"),
         b("chats.toolbar", "Formatting toolbar", "", "chats", "Writing"),
         b("chats.shortcodes", "Convert :shortcodes: to emoji", "", "chats", "Writing", true),
         b("chats.ascii_smileys", "Convert smileys like :) to emoji", "", "chats", "Writing"),
@@ -146,6 +146,14 @@ class SettingsStore(context: Context) {
         for (spec in SettingsSchema.specs) {
             val d = when (val v = spec.default) { is List<*> -> v.joinToString("\n"); else -> v.toString() }
             m[spec.key] = prefs.getString(spec.key, d) ?: d
+        }
+        if (m["appearance.accent"] == "system") {
+            m["appearance.accent"] = "blue"
+            prefs.edit().putString("appearance.accent", "blue").apply()
+        }
+        if (m["chats.send_with"] == "ctrl_enter") {
+            m["chats.send_with"] = "newline"
+            prefs.edit().putString("chats.send_with", "newline").apply()
         }
         return m
     }

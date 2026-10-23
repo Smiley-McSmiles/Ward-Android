@@ -38,6 +38,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -65,6 +71,7 @@ fun ChatScreen(vm: AppViewModel) {
     val typing by vm.typing.collectAsState()
     val accounts by vm.accounts.collectAsState()
     val states by vm.states.collectAsState()
+    val appSettings by vm.settings.state.collectAsState()
     val c = chat ?: return
     val account = accounts.firstOrNull { it.id == c.accountId }
     val contact = contacts.firstOrNull { it.accountId == c.accountId && it.jid == c.jid }
@@ -239,6 +246,7 @@ fun ChatScreen(vm: AppViewModel) {
                 },
                 onAttach = { attach.launch("*/*") },
                 recording = recorder != null,
+                sendWithEnter = (appSettings["chats.send_with"] ?: "enter") == "enter",
                 onVoice = {
                     if (recorder != null) stopVoice()
                     else if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) startVoice()
@@ -464,7 +472,16 @@ private fun formatSize(size: Long): String = when {
 fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: MessageEntity?, editing: MessageEntity?,
              onCancelReply: () -> Unit, onSend: () -> Unit, onAttach: () -> Unit,
              recording: Boolean = false,
+             sendWithEnter: Boolean = true,
              onVoice: () -> Unit = {}) {
+    val enterModifier = if (sendWithEnter) {
+        Modifier.onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && !event.isShiftPressed) {
+                if (text.isNotBlank()) onSend()
+                true
+            } else false
+        }
+    } else Modifier
     Surface(tonalElevation = 3.dp, modifier = Modifier.navigationBarsPadding()) {
         Column {
             AnimatedVisibility(visible = replyTo != null || editing != null,
@@ -487,9 +504,9 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                     Row(verticalAlignment = Alignment.Bottom) {
                         OutlinedTextField(text, onText, placeholder = {
                             Text(if (chat.encryption == "off") "Message" else "Encrypted message")
-                        }, modifier = Modifier.weight(1f).padding(0.dp), maxLines = 6,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) onSend() }),
+                        }, modifier = Modifier.weight(1f).padding(0.dp).then(enterModifier), maxLines = 6,
+                            keyboardOptions = KeyboardOptions(imeAction = if (sendWithEnter) ImeAction.Send else ImeAction.Default),
+                            keyboardActions = if (sendWithEnter) KeyboardActions(onSend = { if (text.isNotBlank()) onSend() }) else KeyboardActions(),
                             colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Color.Transparent,
                                 focusedBorderColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                                 focusedContainerColor = Color.Transparent))

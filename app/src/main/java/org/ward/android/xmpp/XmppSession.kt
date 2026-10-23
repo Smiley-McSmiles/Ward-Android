@@ -30,6 +30,7 @@ import org.jivesoftware.smackx.disco.packet.DiscoverInfo
 import org.jivesoftware.smackx.disco.packet.DiscoverItems
 import org.jivesoftware.smackx.forward.packet.Forwarded
 import org.jivesoftware.smackx.httpfileupload.HttpFileUploadManager
+import org.jivesoftware.smackx.httpfileupload.UploadService
 import org.jivesoftware.smackx.mam.MamManager
 import org.jivesoftware.smackx.pubsub.*
 import org.jivesoftware.smackx.muc.*
@@ -401,15 +402,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 }
             }
         }, null)
-        conn.addAsyncStanzaListener({ stanza ->
-            if (stanza is IQ) {
-                val raw = stanza.toXML(XmlEnvironment.EMPTY).toString()
-                if (raw.contains("urn:xmpp:jingle:1")) {
-                    if (stanza.type == IQ.Type.set) runCatching { conn.sendStanza(IQ.createResultIQ(stanza)) }
-                    call.onJingleIq(stanza, raw)
-                }
-            }
-        }, null)
+        // Jingle IQs are requests: Smack delivers those only to an IQ request handler, never to
+        // stanza listeners. The raw provider also avoids Smack's built-in Jingle parser closing
+        // the connection on GTK's <group semantics='BUNDLE'> element.
+        JingleIqs.register(conn, call)
         conn.addStanzaInterceptor({ stanza ->
             if (stanza is Message) core.addXmlLog(account.id, false, stanza.toXML(XmlEnvironment.EMPTY).toString())
         }, null)
@@ -749,7 +745,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             if (id < 0) return@launch
             val stored = msgEntity.copy(id = id)
             core.touchChat(chatNow, stored, outgoing = outgoing)
-            val active = core.activeChat.value == chatNow.id
+            val active = core.isChatActive(chatNow.id)
             if (!outgoing && active) {
                 if (core.settings.bool("chats.send_receipts")) sendReceipt(chatNow, stanzaId)
                 if (core.settings.bool("chats.send_markers")) sendDisplayed(chatNow, stored)
@@ -1057,7 +1053,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             if (id >= 0) {
                 val stored = msgEntity.copy(id = id)
                 core.touchChat(chat, stored, outgoing = msgEntity.direction == 1)
-                if (core.activeChat.value == chat.id && msgEntity.direction == 0) {
+                if (core.isChatActive(chat.id) && msgEntity.direction == 0) {
                     if (core.settings.bool("chats.send_markers")) sendDisplayed(chat, stored)
                     core.dao.updateChat(chat.copy(unread = 0, mentions = 0, lastReadId = id))
                 }
@@ -1721,12 +1717,60 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         return try {
             val conn = connection ?: return null
             val mgr = HttpFileUploadManager.getInstanceFor(conn)
-            if (!mgr.isUploadServiceDiscovered) mgr.discoverUploadService()
+            if (!mgr.isUploadServiceDiscovered) {
+                runCatching { mgr.discoverUploadService() }
+            }
+            if (mgr.getDefaultUploadService() == null) {
+                core.addXmlLog(account.id, false, "HTTP upload service not found by Smack; probing disco#items")
+                ensureUploadService(conn, mgr) ?: run {
+                    core.addXmlLog(account.id, false, "No XEP-0363 upload service advertised by this server")
+                    return null
+                }
+            }
+            val service = mgr.getDefaultUploadService()
+            core.addXmlLog(account.id, false, "HTTP upload via ${service?.address}")
             mgr.uploadFile(file.inputStream(), name, file.length()).toString()
         } catch (e: Exception) {
-            core.addXmlLog(account.id, false, "upload failed: ${e.message}")
+            core.addXmlLog(account.id, false, "upload failed: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
+    }
+
+    /**
+     * Smack's discoverUploadService() can miss a Prosody upload component when the server's
+     * disco#items answer arrives in a slightly different shape. Walk the server's items and
+     * feature discovery ourselves, then install the discovered service into the manager.
+     */
+    private fun ensureUploadService(conn: XMPPConnection, mgr: HttpFileUploadManager): UploadService? {
+        val disco = ServiceDiscoveryManager.getInstanceFor(conn)
+        val domain = conn.xmppServiceDomain
+        val candidates = linkedSetOf<org.jxmpp.jid.Jid>()
+        candidates.add(domain)
+        runCatching {
+            disco.discoverItems(domain).items.forEach { candidates.add(it.entityID) }
+        }
+        runCatching {
+            candidates.add(org.jxmpp.jid.impl.JidCreate.domainBareFrom("upload.${domain}"))
+        }
+        for (jid in candidates) {
+            val info = runCatching { disco.discoverInfo(jid) }.getOrNull() ?: continue
+            val v03 = info.containsFeature("urn:xmpp:http:upload:0")
+            val v02 = info.containsFeature("urn:xmpp:http:upload")
+            if (!v03 && !v02) continue
+            val service = runCatching {
+                val method = HttpFileUploadManager::class.java
+                    .getDeclaredMethod("uploadServiceFrom", org.jivesoftware.smackx.disco.packet.DiscoverInfo::class.java)
+                method.isAccessible = true
+                method.invoke(null, info) as UploadService
+            }.getOrNull() ?: continue
+            runCatching {
+                val field = HttpFileUploadManager::class.java.getDeclaredField("defaultUploadService")
+                field.isAccessible = true
+                field.set(mgr, service)
+            }.getOrThrow()
+            return service
+        }
+        return null
     }
 
     fun discoverInfo(jid: String): DiscoverInfo? = try {

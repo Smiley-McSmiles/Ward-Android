@@ -99,7 +99,8 @@ class WardService : Service() {
             else -> msg.body
         }
         val intent = Intent(this, MainActivity::class.java).apply { putExtra("openChatId", chat.id) }
-        val pi = PendingIntent.getActivity(this, chat.id.toInt(), intent,
+        val notificationId = MESSAGE_NOTIFICATION_BASE + chat.id.toInt()
+        val pi = PendingIntent.getActivity(this, notificationId, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, "messages")
             .setSmallIcon(android.R.drawable.stat_notify_chat)
@@ -110,10 +111,13 @@ class WardService : Service() {
             .setAutoCancel(true)
             .setGroup("ward-messages")
             .build()
-        getSystemService(NotificationManager::class.java).notify(chat.id.toInt(), n)
+        getSystemService(NotificationManager::class.java).notify(notificationId, n)
     }
 
     companion object {
+        // Keep message notifications away from the foreground service notification id (1).
+        private const val MESSAGE_NOTIFICATION_BASE = 100_000
+
         fun start(context: Context) {
             val i = Intent(context, WardService::class.java)
             runCatching {

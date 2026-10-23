@@ -1,11 +1,17 @@
 package org.ward.android
 
+import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.Message
 import org.jivesoftware.smack.packet.StanzaBuilder
+import org.jivesoftware.smack.packet.StandardExtensionElement
+import org.jivesoftware.smack.util.PacketParserUtils
 import org.junit.Assert.*
 import org.junit.Test
 import org.ward.android.util.FileCrypto
+import org.ward.android.xmpp.ExternalServicesIq
+import org.ward.android.xmpp.JingleIqs
 import org.ward.android.xmpp.JingleSdp
+import org.ward.android.xmpp.RawJingleIq
 import org.ward.android.xmpp.OpenPgp
 import org.ward.android.xmpp.attachments
 import java.io.File
@@ -45,6 +51,49 @@ class CoreTests {
         assertTrue(back.contains("a=mid:0"))
         assertTrue(back.contains("a=ice-ufrag:abc"))
         assertTrue(back.contains("a=candidate:"))
+        // MAXBUNDLE needs the group even when there is only one content.
+        assertTrue(jingle.contains("<group xmlns='urn:xmpp:jingle:apps:grouping:0'"))
+        assertTrue(back.contains("a=group:BUNDLE 0"))
+        assertTrue(back.contains("a=setup:actpass"))
+    }
+
+    @Test fun jmiIdComesFromCallElementNotMessageId() {
+        val msg: Message = PacketParserUtils.parseStanza(
+            "<message xmlns='jabber:client' from='bob@example.org/gtk' to='alice@example.org/phone' " +
+                "type='chat' id='message-id'><ringing xmlns='urn:xmpp:jingle-message:0' id='call-id'/></message>")
+        val element = msg.extensions.firstOrNull { it.namespace == "urn:xmpp:jingle-message:0" }
+            as? StandardExtensionElement
+        assertNotNull(element)
+        assertEquals("call-id", element!!.getAttributeValue("id"))
+        assertNotEquals("message-id", element.getAttributeValue("id"))
+    }
+
+    @Test fun jingleProviderKeepsBundleGroup() {
+        JingleIqs.registerProvider()
+        val iq: IQ = PacketParserUtils.parseStanza(
+            "<iq xmlns='jabber:client' type='set' id='j1' from='bob@example.org/gtk'>" +
+                "<jingle xmlns='urn:xmpp:jingle:1' action='session-initiate' sid='call' initiator='bob@example.org/gtk'>" +
+                "<content creator='initiator' name='audio0'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/>" +
+                "<transport xmlns='urn:xmpp:jingle:transports:ice-udp:1'/></content>" +
+                "<group xmlns='urn:xmpp:jingle:apps:grouping:0' semantics='BUNDLE'><content name='audio0'/></group>" +
+                "</jingle></iq>")
+        assertTrue(iq is RawJingleIq)
+        assertTrue((iq as RawJingleIq).xml.contains("semantics='BUNDLE'"))
+    }
+
+    @Test fun externalServiceDiscoveryIqKeepsServicesPayload() {
+        ExternalServicesIq.register()
+        val iq: IQ = PacketParserUtils.parseStanza(
+            "<iq type='result' id='disco' from='example.org'>" +
+                "<services xmlns='urn:xmpp:extdisco:2'>" +
+                "<service type='turn' host='turn.example.org' port='3478' username='u' password='p'/>" +
+                "</services></iq>")
+        assertTrue(iq is ExternalServicesIq)
+        val payload = (iq as ExternalServicesIq).rawXml
+        assertTrue(payload.contains("turn.example.org"))
+        assertTrue(payload.contains("services"))
+        val request = ExternalServicesIq().toXML(org.jivesoftware.smack.packet.XmlEnvironment.EMPTY).toString()
+        assertTrue(request.contains("<services xmlns='urn:xmpp:extdisco:2'"))
     }
 
     @Test fun bodylessMessageDoesNotCrashAttachmentParsing() {

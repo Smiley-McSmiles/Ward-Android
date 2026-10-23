@@ -7,7 +7,10 @@ import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.Message
 import org.jivesoftware.smack.packet.Stanza
 import org.jivesoftware.smack.packet.StanzaBuilder
+import org.jivesoftware.smack.packet.StandardExtensionElement
+import org.jivesoftware.smack.packet.XmlEnvironment
 import org.jivesoftware.smack.util.XmlStringBuilder
+import org.jivesoftware.smackx.hints.element.StoreHint
 import org.jivesoftware.smackx.delay.packet.DelayInformation
 import org.webrtc.*
 import kotlinx.coroutines.launch
@@ -15,8 +18,11 @@ import org.ward.android.WardCore
 import org.ward.android.data.ChatEntity
 import org.jxmpp.jid.impl.JidCreate
 import org.ward.android.util.JidUtil
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.Executors
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class CallManager(private val session: XmppSession) {
     companion object {
@@ -44,7 +50,13 @@ class CallManager(private val session: XmppSession) {
     private var initiatorJid = ""
     private var answering = false
     private var gatherScheduled = false
+    private var canSendCandidates = false
+    private val localCandidates = mutableListOf<IceCandidate>()
     private var pendingOfferXml: String? = null
+    private val discoveredIceServers = mutableListOf<PeerConnection.IceServer>()
+    private val discoveryLock = Object()
+    @Volatile private var discoveryStarted = false
+    @Volatile private var discoveryDone = false
 
     fun current(): CallUiState? = session.core.call.value
 
@@ -62,15 +74,15 @@ class CallManager(private val session: XmppSession) {
         remoteSet = false
         answering = false
         publish(CallUiState(sid, peerJid, peerName, video, false, "OUTGOING"))
+        discoverTurnServices()
         sendJmi("propose", mapOf("video" to video))
     }
 
-    fun onIncomingPropose(msg: Message, xml: String) {
+    fun onIncomingPropose(msg: Message, xml: String, id: String) {
         if (session.core.call.value != null) {
-            sendJmi("reject", emptyMap(), from = msg.from?.asEntityBareJidIfPossible()?.toString() ?: return, id = extractAttr(xml, "id") ?: return)
+            sendJmi("reject", emptyMap(), to = msg.from?.toString(), id = id)
             return
         }
-        val id = extractAttr(xml, "id") ?: return
         sid = id
         peerJid = msg.from?.asEntityBareJidIfPossible()?.toString() ?: return
         peerFullJid = msg.from?.toString() ?: peerJid
@@ -86,6 +98,7 @@ class CallManager(private val session: XmppSession) {
             return
         }
         publish(CallUiState(sid, peerJid, peerName, wantsVideo, true, "INCOMING"))
+        discoverTurnServices()
         sendJmi("ringing", emptyMap(), id = sid)
     }
 
@@ -103,7 +116,7 @@ class CallManager(private val session: XmppSession) {
         // XEP-0353: the caller needs "proceed"; "accept" tells our other devices to stop ringing.
         sendJmi("proceed", emptyMap(), id = sid)
         session.connection?.user?.asBareJid()?.toString()?.let { own ->
-            if (own != peerJid) sendJmi("accept", emptyMap(), from = own, id = sid)
+            if (own != peerJid) sendJmi("accept", emptyMap(), to = own, id = sid)
         }
         pendingOfferXml?.let { xml -> pendingOfferXml = null; acceptSession(xml) }
     }
@@ -115,10 +128,16 @@ class CallManager(private val session: XmppSession) {
     }
 
     fun hangup() {
+        val phase = session.core.call.value?.phase
         if (sid.isNotBlank()) {
-            val xml = "<jingle xmlns='${JingleSdp.NS_JINGLE}' action='session-terminate' sid='${esc(sid)}' initiator='${esc(if (initiatorJid.isBlank()) (session.connection?.user?.toString() ?: session.account.jid) else initiatorJid)}'><reason><success/></reason></jingle>"
-            runCatching { sendJingleRaw("session-terminate", xml) }
-            sendJmi("retract", emptyMap(), id = sid)
+            if (isCaller && phase in listOf("OUTGOING", "RINGING")) {
+                // No Jingle session exists yet; retract the proposal.
+                sendJmi("retract", emptyMap(), id = sid)
+            } else if (!isCaller && phase == "INCOMING") {
+                sendJmi("reject", emptyMap(), id = sid)
+            } else {
+                runCatching { sendJingleRaw("session-terminate", terminateXml("success")) }
+            }
         }
         finish()
     }
@@ -180,27 +199,43 @@ class CallManager(private val session: XmppSession) {
         session.core.addXmlLog(session.account.id, true, xml)
         if (peerJid.isNotBlank() && msg.from?.asEntityBareJidIfPossible()?.toString() == peerJid)
             peerFullJid = msg.from?.toString() ?: peerFullJid
-        val action = Regex("<([a-z-]+)[^>]*xmlns=['\\\"]urn:xmpp:jingle-message:0['\\\"]").find(xml)?.groupValues?.get(1)
+        val action = msg.extensions.firstOrNull { it.namespace == JingleSdp.NS_JMI }?.elementName
+            ?: Regex("<([a-z-]+)[^>]*xmlns=['\\\"]urn:xmpp:jingle-message:0['\\\"]").find(xml)?.groupValues?.get(1)
             ?: Regex("xmlns=['\\\"]urn:xmpp:jingle-message:0['\\\"]").find(xml)?.let { "unknown" } ?: return
-        val id = extractAttr(xml, "id") ?: ""
+        val id = jmiId(msg, xml) ?: ""
         if (id.isNotBlank() && sid.isNotBlank() && id != sid) return
         when (action) {
-            "propose" -> onIncomingPropose(msg, xml)
-            "ringing" -> session.core.call.value?.let { publish(it.copy(phase = "RINGING")) }
-            "accept", "proceed" -> {
+            "propose" -> onIncomingPropose(msg, xml, id)
+            "ringing" -> session.core.call.value?.let {
+                if (it.phase == "OUTGOING" || it.phase == "RINGING") publish(it.copy(phase = "RINGING"))
+            }
+            "proceed" -> {
                 if (isCaller && session.core.call.value?.phase in listOf("OUTGOING", "RINGING")) {
                     session.core.call.value?.let { publish(it.copy(phase = "CONNECTING", incoming = false)) }
                     createOfferAndInitiate()
                 }
             }
-            "reject" -> { finish(); session.core.setCallState(session.core.call.value?.copy(phase = "ENDED")) }
-            "retract" -> finish()
+            "accept" -> {
+                if (isCaller && session.core.call.value?.phase in listOf("OUTGOING", "RINGING")) {
+                    session.core.call.value?.let { publish(it.copy(phase = "CONNECTING", incoming = false)) }
+                    createOfferAndInitiate()
+                } else if (!isCaller && session.core.call.value?.phase == "INCOMING") {
+                    val from = msg.from?.toString()
+                    val own = session.connection?.user?.toString()
+                    // Require a full JID so an echoed bare-JID copy of our own accept cannot stop
+                    // the call we just answered. Another resource of ours has a different full JID.
+                    if (from != null && from.contains('/') && from != own) finish()
+                }
+            }
+            "reject" -> remoteEnded("Call declined")
+            "busy" -> remoteEnded("The other side is busy")
+            "retract" -> remoteEnded("Call ended")
         }
     }
 
-    private fun sendJmi(action: String, extra: Map<String, Any>, from: String? = null, id: String = sid) {
-        val to = from ?: peerJid
-        if (to.isBlank() || id.isBlank()) return
+    private fun sendJmi(action: String, extra: Map<String, Any>, to: String? = null, id: String = sid) {
+        val destination = to ?: peerFullJid.ifBlank { peerJid }
+        if (destination.isBlank() || id.isBlank()) return
         val body = StringBuilder("<$action xmlns='urn:xmpp:jingle-message:0' id='${esc(id)}'/>")
         if (action == "propose") {
             body.setLength(0)
@@ -210,9 +245,10 @@ class CallManager(private val session: XmppSession) {
             body.append("</propose>")
         }
         val msg = StanzaBuilder.buildMessage()
-        try { msg.to(to) } catch (_: Exception) { return }
+        try { msg.to(destination) } catch (_: Exception) { return }
         msg.ofType(Message.Type.chat)
         msg.addExtension(RawExtension(action, JingleSdp.NS_JMI, body.toString()))
+        StoreHint.set(msg)
         val built = msg.build()
         session.core.addXmlLog(session.account.id, false, built.toXML(org.jivesoftware.smack.packet.XmlEnvironment.EMPTY).toString())
         session.connection?.sendStanza(built)
@@ -234,6 +270,7 @@ class CallManager(private val session: XmppSession) {
                 wantsVideo = xml.contains("media='video'") || xml.contains("media=\"video\"")
                 isCaller = false
                 if (!ensureFactory()) return
+                discoverTurnServices()
                 publish(CallUiState(sid, peerJid, peerName, wantsVideo, true, "INCOMING"))
             } else return
         }
@@ -249,13 +286,15 @@ class CallManager(private val session: XmppSession) {
                     session.core.addXmlLog(session.account.id, true, "Jingle: could not parse session-accept SDP")
                     return
                 }
-                peer?.setRemoteDescription(SimpleSdpObserver("remote"), SessionDescription(SessionDescription.Type.ANSWER, sdp))
-                remoteSet = true
-                flushCandidates()
-                session.core.call.value?.let { publish(it.copy(phase = "ACTIVE", startedAt = System.currentTimeMillis())) }
+                peer?.setRemoteDescription(object : SimpleSdpObserver("remote", ::fail) {
+                    override fun onSetSuccess() {
+                        remoteSet = true
+                        flushCandidates()
+                    }
+                }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
             }
             "transport-info" -> addCandidates(xml)
-            "session-terminate" -> finish()
+            "session-terminate" -> remoteEnded()
         }
     }
 
@@ -267,9 +306,9 @@ class CallManager(private val session: XmppSession) {
         }
         answering = false
         remoteSet = false
-        pc.createOffer(object : SimpleSdpObserver("offer") {
+        pc.createOffer(object : SimpleSdpObserver("offer", ::fail) {
             override fun onCreateSuccess(sdp: SessionDescription) {
-                pc.setLocalDescription(object : SimpleSdpObserver("local-offer") {
+                pc.setLocalDescription(object : SimpleSdpObserver("local-offer", ::fail) {
                     override fun onSetSuccess() { scheduleInitialJingle("session-initiate", sdp.type) }
                 }, sdp)
             }
@@ -287,13 +326,13 @@ class CallManager(private val session: XmppSession) {
             return
         }
         answering = true
-        pc.setRemoteDescription(object : SimpleSdpObserver("remote-offer") {
+        pc.setRemoteDescription(object : SimpleSdpObserver("remote-offer", ::fail) {
             override fun onSetSuccess() {
                 remoteSet = true
                 flushCandidates()
-                pc.createAnswer(object : SimpleSdpObserver("answer") {
+                pc.createAnswer(object : SimpleSdpObserver("answer", ::fail) {
                     override fun onCreateSuccess(answer: SessionDescription) {
-                        pc.setLocalDescription(object : SimpleSdpObserver("local-answer") {
+                        pc.setLocalDescription(object : SimpleSdpObserver("local-answer", ::fail) {
                             override fun onSetSuccess() { scheduleInitialJingle("session-accept", answer.type) }
                         }, answer)
                     }
@@ -312,9 +351,15 @@ class CallManager(private val session: XmppSession) {
                 if (initiatorJid.isBlank()) (session.connection?.user?.toString() ?: session.account.jid) else initiatorJid,
                 if (action == "session-accept") (session.connection?.user?.toString() ?: session.account.jid) else null)
             sendJingleRaw(action, xml)
-            if (action == "session-accept") {
-                session.core.call.value?.let { publish(it.copy(phase = "CONNECTING", incoming = false)) }
+            if (action == "session-initiate") {
+                session.core.call.value?.let { s ->
+                    if (s.phase != "ACTIVE" && s.phase != "ENDED") {
+                        publish(s.copy(phase = "CONNECTING", incoming = false))
+                    }
+                }
             }
+            canSendCandidates = true
+            flushLocalCandidates()
         }, 1500)
     }
 
@@ -348,10 +393,129 @@ class CallManager(private val session: XmppSession) {
         }
     }
 
+    private fun sendCandidate(candidate: IceCandidate) {
+        val c = candidate.sdp ?: return
+        val parts = c.removePrefix("candidate:").split(' ')
+        if (parts.size < 8) return
+        val content = candidate.sdpMid?.toString() ?: "0"
+        val xml = "<jingle xmlns='${JingleSdp.NS_JINGLE}' action='transport-info' sid='${esc(sid)}' initiator='${esc(initiatorJid)}'>" +
+            "<content name='${esc(content)}'><transport xmlns='${JingleSdp.NS_ICE}'><candidate component='${parts[1]}' foundation='${esc(parts[0])}' generation='0' id='${esc(parts[0])}${parts[1]}' ip='${esc(parts[4])}' network='0' port='${parts[5]}' priority='${parts[3]}' protocol='${esc(parts[2])}' type='${esc(parts[7])}'/></transport></content></jingle>"
+        sendJingleRaw("transport-info", xml)
+    }
+
+    private fun flushLocalCandidates() {
+        if (!canSendCandidates) return
+        for (c in localCandidates) sendCandidate(c)
+        localCandidates.clear()
+    }
+
     private fun flushCandidates() {
         if (!remoteSet) return
         for (c in pendingCandidates) peer?.addIceCandidate(c)
         pendingCandidates.clear()
+    }
+
+    // ================================================================ TURN / STUN
+    private fun discoverTurnServices() {
+        if (discoveryStarted) return
+        discoveryStarted = true
+        synchronized(discoveryLock) { discoveryDone = false }
+        if (!session.core.settings.bool("calls.discover")) {
+            markDiscoveryDone()
+            return
+        }
+        val conn = session.connection ?: run { markDiscoveryDone(); return }
+        try {
+            ExternalServicesIq.register()
+            val iq = ExternalServicesIq()
+            iq.type = IQ.Type.get
+            iq.to = conn.xmppServiceDomain
+            session.core.scope.launch {
+                try {
+                    val response: IQ = conn.sendIqRequestAndWaitForResponse(iq)
+                    val payload = (response as? ExternalServicesIq)?.rawXml
+                        ?: response.extensions.firstOrNull { it.namespace == ExternalServicesIq.NS }
+                            ?.toXML(XmlEnvironment.EMPTY)?.toString()
+                        ?: response.toXML(XmlEnvironment.EMPTY).toString()
+                    val parsed = parseExternalServices(payload)
+                    synchronized(discoveredIceServers) {
+                        discoveredIceServers.clear()
+                        discoveredIceServers.addAll(parsed)
+                    }
+                    session.core.addXmlLog(session.account.id, true, "XEP-0215: ${parsed.size} ICE server(s)")
+                } catch (e: Exception) {
+                    session.core.addXmlLog(session.account.id, true, "XEP-0215 discovery failed: ${e.message}")
+                } finally {
+                    markDiscoveryDone()
+                }
+            }
+        } catch (_: Exception) {
+            markDiscoveryDone()
+        }
+    }
+
+    private fun markDiscoveryDone() {
+        synchronized(discoveryLock) {
+            discoveryDone = true
+            discoveryLock.notifyAll()
+        }
+    }
+
+    private fun awaitDiscovery(timeoutMs: Long) {
+        synchronized(discoveryLock) {
+            if (discoveryDone) return
+            runCatching { discoveryLock.wait(timeoutMs) }
+        }
+    }
+
+    private fun parseExternalServices(xml: String): List<PeerConnection.IceServer> {
+        val doc = runCatching {
+            javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+                .newDocumentBuilder().parse(java.io.ByteArrayInputStream(xml.toByteArray()))
+        }.getOrNull() ?: return emptyList()
+        val out = mutableListOf<PeerConnection.IceServer>()
+        val services = doc.getElementsByTagNameNS(ExternalServicesIq.NS, "service")
+        for (i in 0 until services.length) {
+            val e = services.item(i) as? org.w3c.dom.Element ?: continue
+            val type = e.getAttribute("type").lowercase()
+            if (type != "stun" && type != "turn") continue
+            val host = e.getAttribute("host")
+            if (host.isBlank()) continue
+            val port = e.getAttribute("port").ifBlank { "3478" }
+            val transport = e.getAttribute("transport").ifBlank { "udp" }
+            val scheme = if (type == "turn" && transport == "tls") "turns" else type
+            val query = if (type == "turn") "?transport=${if (transport == "tls") "tcp" else transport}" else ""
+            val url = "$scheme:$host:$port$query"
+            val user = e.getAttribute("username")
+            val pass = e.getAttribute("password")
+            val secret = e.getAttribute("secret")
+            val b = PeerConnection.IceServer.builder(url)
+            if (type == "turn") {
+                val (u, p) = turnCredential(
+                    user.ifBlank { session.core.settings.string("calls.turn_user") },
+                    pass.ifBlank { session.core.settings.string("calls.turn_password") },
+                    secret.ifBlank { session.core.settings.string("calls.turn_secret") }
+                )
+                if (u.isNotBlank()) b.setUsername(u)
+                if (p.isNotBlank()) b.setPassword(p)
+            }
+            out.add(b.createIceServer())
+        }
+        return out
+    }
+
+    private fun turnCredential(user: String, password: String, secret: String): Pair<String, String> {
+        if (secret.isBlank()) return user to password
+        return runCatching {
+            val ttl = session.core.settings.int("calls.turn_ttl").coerceIn(300, 604800)
+            val name = user.ifBlank { "ward" }
+            val expiry = System.currentTimeMillis() / 1000 + ttl
+            val username = "$expiry:$name"
+            val mac = Mac.getInstance("HmacSHA1").apply {
+                init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA1"))
+            }
+            username to Base64.getEncoder().encodeToString(mac.doFinal(username.toByteArray(Charsets.UTF_8)))
+        }.getOrElse { user to password }
     }
 
     // ================================================================ WebRTC
@@ -386,19 +550,34 @@ class CallManager(private val session: XmppSession) {
     private fun ensurePeer(): PeerConnection? {
         peer?.let { return it }
         val f = factory ?: return null
+        if (session.core.settings.bool("calls.relay_only")) {
+            discoverTurnServices()
+            awaitDiscovery(2500)
+        }
         val servers = mutableListOf<PeerConnection.IceServer>()
+        synchronized(discoveredIceServers) { servers.addAll(discoveredIceServers) }
         val stun = session.core.settings.string("calls.stun").split(' ', ',').filter { it.isNotBlank() }
         stun.forEach { servers.add(PeerConnection.IceServer.builder(it.trim()).createIceServer()) }
         val turn = session.core.settings.string("calls.turn").split(' ', ',').filter { it.isNotBlank() }
         val user = session.core.settings.string("calls.turn_user")
         val pass = session.core.settings.string("calls.turn_password")
-        turn.forEach { servers.add(PeerConnection.IceServer.builder(it.trim()).setUsername(user).setPassword(pass).createIceServer()) }
+        val secret = session.core.settings.string("calls.turn_secret")
+        turn.forEach {
+            val b = PeerConnection.IceServer.builder(it.trim())
+            val (u, p) = turnCredential(user, pass, secret)
+            if (u.isNotBlank()) b.setUsername(u)
+            if (p.isNotBlank()) b.setPassword(p)
+            servers.add(b.createIceServer())
+        }
         if (servers.isEmpty()) servers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         val cfg = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            if (session.core.settings.bool("calls.relay_only")) {
+                iceTransportsType = PeerConnection.IceTransportsType.RELAY
+            }
         }
         val pc = f.createPeerConnection(cfg, object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState) {}
@@ -406,22 +585,24 @@ class CallManager(private val session: XmppSession) {
                 session.core.addXmlLog(session.account.id, true, "WebRTC ICE state: $state")
                 if (state == PeerConnection.IceConnectionState.CONNECTED || state == PeerConnection.IceConnectionState.COMPLETED) {
                     session.core.call.value?.let { s ->
-                        if (s.phase != "ACTIVE") publish(s.copy(phase = "ACTIVE", startedAt = System.currentTimeMillis()))
+                        if (s.phase != "ACTIVE" && s.phase != "ENDED") {
+                            publish(s.copy(phase = "ACTIVE", startedAt = System.currentTimeMillis()))
+                        }
                     }
                 } else if (state == PeerConnection.IceConnectionState.FAILED) {
-                    session.core.call.value?.let { s -> publish(s.copy(phase = "ENDED", error = "The call could not connect (ICE failed)")) }
+                    fail("The call could not connect (ICE failed)")
                 }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
             override fun onIceCandidate(candidate: IceCandidate) {
+                if (sid.isBlank()) return
                 val c = candidate.sdp ?: return
                 val parts = c.removePrefix("candidate:").split(' ')
                 if (parts.size < 8) return
-                val content = candidate.sdpMid?.toString() ?: "0"
-                val xml = "<jingle xmlns='${JingleSdp.NS_JINGLE}' action='transport-info' sid='${esc(sid)}' initiator='${esc(initiatorJid)}'>" +
-                    "<content name='${esc(content)}'><transport xmlns='${JingleSdp.NS_ICE}'><candidate component='${parts[1]}' foundation='${esc(parts[0])}' generation='0' id='${esc(parts[0])}${parts[1]}' ip='${esc(parts[4])}' network='0' port='${parts[5]}' priority='${parts[3]}' protocol='${esc(parts[2])}' type='${esc(parts[7])}'/></transport></content></jingle>"
-                sendJingleRaw("transport-info", xml)
+                if (!parts[2].equals("udp", ignoreCase = true)) return
+                if (!canSendCandidates) { localCandidates.add(candidate); return }
+                sendCandidate(candidate)
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onAddStream(stream: MediaStream) { attachRemoteTracks(stream) }
@@ -472,6 +653,11 @@ class CallManager(private val session: XmppSession) {
     }
 
     fun finish() {
+        teardown()
+        session.core.setCallState(null)
+    }
+
+    private fun teardown() {
         runCatching { videoCapturer?.stopCapture() }
         runCatching { videoCapturer?.dispose() }
         runCatching { videoTrack?.dispose() }
@@ -485,9 +671,52 @@ class CallManager(private val session: XmppSession) {
         runCatching { factory?.dispose() }; factory = null
         runCatching { eglBase?.release() }; eglBase = null
         localRenderer = null; remoteRenderer = null
-        pendingCandidates.clear(); remoteSet = false; gatherScheduled = false; pendingOfferXml = null
+        pendingCandidates.clear(); localCandidates.clear(); remoteSet = false; gatherScheduled = false
+        canSendCandidates = false; pendingOfferXml = null
+        synchronized(discoveryLock) { discoveryStarted = false; discoveryDone = false }
         sid = ""; peerJid = ""; peerFullJid = ""; peerName = ""; wantsVideo = false; initiatorJid = ""
-        session.core.setCallState(null)
+    }
+
+    private fun fail(reason: String) {
+        val state = session.core.call.value ?: return
+        if (state.phase == "ENDED") return
+        session.core.addXmlLog(session.account.id, false, "call failed: $reason")
+        val ended = state.copy(phase = "ENDED", error = reason)
+        val failedSid = sid
+        handler.post {
+            val current = session.core.call.value
+            if (current == null || current.sessionId != ended.sessionId) return@post
+            if (failedSid.isNotBlank() && sid == failedSid) {
+                sendJingleRaw("session-terminate", terminateXml("failed-application"))
+            }
+            teardown()
+            publish(ended)
+        }
+    }
+
+    private fun terminateXml(reason: String): String =
+        "<jingle xmlns='${JingleSdp.NS_JINGLE}' action='session-terminate' sid='${esc(sid)}' " +
+            "initiator='${esc(if (initiatorJid.isBlank()) (session.connection?.user?.toString() ?: session.account.jid) else initiatorJid)}'>" +
+            "<reason><$reason/></reason></jingle>"
+
+    private fun remoteEnded(reason: String = "The other side ended the call") {
+        val state = session.core.call.value ?: return
+        if (state.phase == "ENDED") return
+        val ended = state.copy(phase = "ENDED", error = reason)
+        handler.post {
+            val current = session.core.call.value
+            if (current == null || current.sessionId != ended.sessionId) return@post
+            teardown()
+            publish(ended)
+        }
+    }
+
+    private fun jmiId(msg: Message, xml: String): String? {
+        val element = msg.extensions.firstOrNull { it.namespace == JingleSdp.NS_JMI } as? StandardExtensionElement
+        element?.getAttributeValue("id")?.let { return it }
+        // Fallback: read the id from the JMI action element, never from the enclosing <message id>.
+        return Regex("<(?:propose|ringing|proceed|accept|reject|retract|busy)\\b[^>]*\\bid=['\"]([^'\"]+)['\"]")
+            .find(xml)?.groupValues?.get(1)
     }
 
     private fun extractAttr(xml: String, name: String): String? =
@@ -498,6 +727,7 @@ class CallManager(private val session: XmppSession) {
 }
 
 class RawJingleIq(private val jingleXml: String) : IQ("jingle", JingleSdp.NS_JINGLE) {
+    val xml: String get() = jingleXml
     override fun getIQChildElementBuilder(builder: IQ.IQChildElementXmlStringBuilder): IQ.IQChildElementXmlStringBuilder {
         val open = jingleXml.substringAfter('<')
         val attrs = open.substringBefore('>')
@@ -511,9 +741,9 @@ class RawJingleIq(private val jingleXml: String) : IQ("jingle", JingleSdp.NS_JIN
     }
 }
 
-open class SimpleSdpObserver(private val tag: String) : SdpObserver {
+open class SimpleSdpObserver(private val tag: String, private val onFailure: ((String) -> Unit)? = null) : SdpObserver {
     override fun onCreateSuccess(sdp: SessionDescription) {}
     override fun onSetSuccess() {}
-    override fun onCreateFailure(error: String) {}
-    override fun onSetFailure(error: String) {}
+    override fun onCreateFailure(error: String) { onFailure?.invoke("$tag: $error") }
+    override fun onSetFailure(error: String) { onFailure?.invoke("$tag: $error") }
 }

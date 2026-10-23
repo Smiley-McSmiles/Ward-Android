@@ -40,6 +40,11 @@ interface WardDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertMessage(m: MessageEntity): Long
     @Update suspend fun updateMessage(m: MessageEntity)
     @Query("DELETE FROM messages WHERE chatId=:chatId") suspend fun clearMessages(chatId: Long)
+    @Query("DELETE FROM messages") suspend fun clearAllMessages()
+    @Query("DELETE FROM receipts") suspend fun clearAllReceipts()
+    @Query("DELETE FROM devices") suspend fun clearAllDevices()
+    @Query("DELETE FROM pgp_keys") suspend fun clearAllPgpKeys()
+    @Query("UPDATE chats SET preview='', previewSender='', unread=0, mentions=0, lastReadId=0") suspend fun resetAllChats()
     @Query("DELETE FROM contacts WHERE accountId=:accountId AND jid=:jid") suspend fun deleteContact(accountId: Long, jid: String)
     @Query("DELETE FROM devices WHERE accountId=:accountId AND jid=:jid") suspend fun deleteDevicesFor(accountId: Long, jid: String)
     @Query("DELETE FROM devices WHERE accountId=:accountId AND jid=:jid AND deviceId=:deviceId AND protocol=:protocol") suspend fun deleteDevice(accountId: Long, jid: String, deviceId: Long, protocol: String)

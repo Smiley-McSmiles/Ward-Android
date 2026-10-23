@@ -3,7 +3,11 @@ package org.ward.android.ui
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.SideEffect
@@ -21,13 +25,33 @@ private val accents = mapOf(
 
 @Composable
 fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
-    val style = settings.string("appearance.style", "system")
+    val settingsState by settings.state.collectAsState()
+    val style = settingsState["appearance.style"] ?: "system"
     val dark = when (style) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
-    val accent = accents[settings.string("appearance.accent", "system")] ?: Color(0xFF3584E4)
-    val colors = if (dark) darkColorScheme(primary = accent, secondary = accent,
-        surface = Color(0xFF1E1E1E), background = Color(0xFF171717), surfaceVariant = Color(0xFF2C2C2C))
-    else lightColorScheme(primary = accent, secondary = accent,
-        surface = Color(0xFFFDFDFD), background = Color(0xFFF6F5F4), surfaceVariant = Color(0xFFEEEDEB))
+    val accent = accents[settingsState["appearance.accent"] ?: "blue"] ?: Color(0xFF3584E4)
+    val surface = if (dark) Color(0xFF1E1E1E) else Color(0xFFFDFDFD)
+    val background = if (dark) Color(0xFF171717) else Color(0xFFF6F5F4)
+    val tintAlpha = if (dark) 0.34f else 0.18f
+    val primaryContainer = accent.copy(alpha = tintAlpha).compositeOver(surface)
+    val secondaryContainer = accent.copy(alpha = tintAlpha * 0.80f).compositeOver(surface)
+    val tertiaryContainer = accent.copy(alpha = tintAlpha * 1.25f).compositeOver(surface)
+    val onContainer = if (dark) Color(0xFFF4F1F7) else Color(0xFF1C1B1F)
+    val onAccent = if (accent.luminance() > 0.55f) Color(0xFF1C1B1F) else Color.White
+    val colors = if (dark) darkColorScheme(
+        primary = accent, onPrimary = onAccent,
+        primaryContainer = primaryContainer, onPrimaryContainer = onContainer,
+        secondary = accent, onSecondary = onAccent,
+        secondaryContainer = secondaryContainer, onSecondaryContainer = onContainer,
+        tertiaryContainer = tertiaryContainer, onTertiaryContainer = onContainer,
+        surface = surface, background = background, surfaceVariant = Color(0xFF2C2C2C)
+    ) else lightColorScheme(
+        primary = accent, onPrimary = onAccent,
+        primaryContainer = primaryContainer, onPrimaryContainer = onContainer,
+        secondary = accent, onSecondary = onAccent,
+        secondaryContainer = secondaryContainer, onSecondaryContainer = onContainer,
+        tertiaryContainer = tertiaryContainer, onTertiaryContainer = onContainer,
+        surface = surface, background = background, surfaceVariant = Color(0xFFEEEDEB)
+    )
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {

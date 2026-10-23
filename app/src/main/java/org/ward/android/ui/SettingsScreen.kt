@@ -90,7 +90,7 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
 fun pageIcon(key: String) = when (key) {
     "general" -> Icons.Filled.Tune; "appearance" -> Icons.Filled.Palette; "chats" -> Icons.Filled.Chat
     "calls" -> Icons.Filled.Call; "notifications" -> Icons.Filled.Notifications; "accounts" -> Icons.Filled.People
-    "encryption" -> Icons.Filled.Lock; "storage" -> Icons.Filled.Storage; else -> Icons.Filled.Build
+    "security" -> Icons.Filled.Lock; "encryption" -> Icons.Filled.Lock; "storage" -> Icons.Filled.Storage; else -> Icons.Filled.Build
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,6 +103,7 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
     }
     if (key == "about") { AboutPage(onBack); return }
     if (key == "donate") { DonatePage(onBack); return }
+    if (key == "security") { SecurityPage(vm, onBack); return }
     if (key == "xml") { XmlConsolePage(vm, onBack); return }
     if (key == "disco") { DiscoPage(vm, onBack); return }
     val state by vm.settings.state.collectAsState()
@@ -167,15 +168,17 @@ fun SettingRow(vm: AppViewModel, spec: SettingSpec, value: String) {
         SettingType.CHOICE -> {
             var open by remember { mutableStateOf(false) }
             val label = spec.choices.firstOrNull { it.value.toString() == value }?.label ?: value
-            Box {
-                ListItem(headlineContent = { Text(spec.title) },
-                    supportingContent = if (spec.subtitle.isBlank()) null else ({ Text(spec.subtitle) }),
-                    trailingContent = { TextButton(onClick = { open = true }) { Text(label) } })
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    for (ch in spec.choices) DropdownMenuItem(text = { Text(ch.label) },
-                        onClick = { vm.settings.set(spec.key, ch.value); open = false })
-                }
-            }
+            ListItem(headlineContent = { Text(spec.title) },
+                supportingContent = if (spec.subtitle.isBlank()) null else ({ Text(spec.subtitle) }),
+                trailingContent = {
+                    Box {
+                        TextButton(onClick = { open = true }) { Text(label) }
+                        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                            for (ch in spec.choices) DropdownMenuItem(text = { Text(ch.label) },
+                                onClick = { vm.settings.set(spec.key, ch.value); open = false })
+                        }
+                    }
+                })
         }
         SettingType.INT -> Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row { Text(spec.title, modifier = Modifier.weight(1f)); Text("$value${spec.unit}") }

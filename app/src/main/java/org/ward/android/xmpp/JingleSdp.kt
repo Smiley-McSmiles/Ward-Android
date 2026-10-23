@@ -45,8 +45,10 @@ object JingleSdp {
             }
             contents.append("</transport></content>")
         }
-        val group = if (media.size > 1) "<group xmlns='$NS_GROUP' semantics='BUNDLE'>" +
-            media.joinToString("") { "<content name='${esc(it.mid)}'/>" } + "</group>" else ""
+        // WebRTC is configured with MAXBUNDLE. Even an audio-only offer/answer needs the group,
+        // otherwise libwebrtc rejects the other side's description.
+        val group = "<group xmlns='$NS_GROUP' semantics='BUNDLE'>" +
+            media.joinToString("") { "<content name='${esc(it.mid)}'/>" } + "</group>"
         val attrs = StringBuilder("xmlns='$NS_JINGLE' action='$action' sid='${esc(sid)}' initiator='${esc(initiator)}'")
         if (responder != null) attrs.append(" responder='${esc(responder)}'")
         return "<jingle $attrs>$contents$group</jingle>"
@@ -103,9 +105,18 @@ object JingleSdp {
             mids.add(mid)
         }
         if (medias.isEmpty()) return null
+        val group = first(root, NS_GROUP, "group")
+        val bundleMids = mutableListOf<String>()
+        group?.getElementsByTagNameNS(NS_GROUP, "content")?.let { nodes ->
+            for (i in 0 until nodes.length) {
+                val name = (nodes.item(i) as? Element)?.getAttribute("name") ?: continue
+                if (name.isNotBlank() && name !in bundleMids) bundleMids.add(name)
+            }
+        }
+        val bundleOrder = if (bundleMids.isNotEmpty()) bundleMids else mids
         val sb = StringBuilder()
         sb.append("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n")
-        if (mids.size > 1) sb.append("a=group:BUNDLE ${mids.joinToString(" ")}\r\n")
+        sb.append("a=group:BUNDLE ${bundleOrder.joinToString(" ")}\r\n")
         sb.append("a=msid-semantic: WMS ward\r\n")
         for (m in medias) {
             val payloadIds = m.payloads.joinToString(" ") { it.first.toString() }.ifBlank { if (m.media == "audio") "111 0 8" else "96" }
@@ -113,7 +124,7 @@ object JingleSdp {
             sb.append("c=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\n")
             sb.append("a=ice-ufrag:${m.ufrag}\r\na=ice-pwd:${m.pwd}\r\na=ice-options:trickle\r\n")
             sb.append("a=fingerprint:sha-256 ${m.fingerprint}\r\n")
-            sb.append("a=setup:${if (answering) "active" else "actpass"}\r\n")
+            sb.append("a=setup:${m.setup.ifBlank { if (answering) "active" else "actpass" }}\r\n")
             sb.append("a=mid:${m.mid}\r\na=sendrecv\r\na=rtcp-mux\r\n")
             for ((id, name, clock) in m.payloads) {
                 sb.append("a=rtpmap:$id $name/$clock")

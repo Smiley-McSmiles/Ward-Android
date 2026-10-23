@@ -37,6 +37,7 @@ class WardCore private constructor(val context: Context) {
     val typing: StateFlow<Map<Long, String>> = _typing
     private val _activeChat = MutableStateFlow<Long?>(null)
     val activeChat: StateFlow<Long?> = _activeChat
+    @Volatile private var appForeground = false
     private val _adminCommands = MutableStateFlow<Map<Long, List<AdminCommand>>>(emptyMap())
     val adminCommands: StateFlow<Map<Long, List<AdminCommand>>> = _adminCommands
     private val _unread = MutableStateFlow(0)
@@ -62,6 +63,9 @@ class WardCore private constructor(val context: Context) {
         _states.value = _states.value + (accountId to s)
     }
     fun setActiveChat(id: Long?) { _activeChat.value = id }
+    fun setAppForeground(value: Boolean) { appForeground = value }
+    /** True only while the activity is visible and this chat is the one on screen. */
+    fun isChatActive(chatId: Long): Boolean = appForeground && _activeChat.value == chatId
     fun setTyping(chatId: Long, who: String) {
         _typing.value = if (who.isBlank()) _typing.value - chatId else _typing.value + (chatId to who)
     }
@@ -116,6 +120,27 @@ class WardCore private constructor(val context: Context) {
     fun session(accountId: Long): XmppSession? = sessions[accountId]
     fun allSessions(): List<XmppSession> = sessions.values.toList()
     fun isOnline(accountId: Long): Boolean = sessions[accountId]?.online == true
+
+    /**
+     * Security wipe after the configured number of failed app-lock attempts. Removes local
+     * encryption keys and message history, but keeps accounts, contacts and chat shells so the
+     * user can sign in again and start a new conversation.
+     */
+    suspend fun wipeEncryptionAndHistory() = withContext(Dispatchers.IO) {
+        allSessions().forEach { runCatching { it.stop() } }
+        sessions.clear()
+        dao.clearAllMessages()
+        dao.clearAllReceipts()
+        dao.clearAllDevices()
+        dao.clearAllPgpKeys()
+        dao.resetAllChats()
+        runCatching { File(context.filesDir, "omemo").deleteRecursively() }
+        runCatching { File(context.filesDir, "omemo2").deleteRecursively() }
+        runCatching { File(context.filesDir, "pgp").deleteRecursively() }
+        runCatching { context.filesDir.listFiles { f -> f.name.startsWith("omemo2-") }?.forEach { it.delete() } }
+        runCatching { File(context.filesDir, "reset-legacy-omemo").delete() }
+        recalcUnread()
+    }
 
     fun repairOmemo2(): String {
         val all = allSessions()
@@ -181,7 +206,7 @@ class WardCore private constructor(val context: Context) {
     }
 
     suspend fun touchChat(chat: ChatEntity, msg: MessageEntity, outgoing: Boolean = false, notify: Boolean = true) {
-        val active = _activeChat.value == chat.id
+        val active = isChatActive(chat.id)
         val mentions = msg.mentionsMe
         val newUnread = if (!outgoing && !active) chat.unread + 1 else chat.unread
         val newMentions = if (!outgoing && !active && mentions) chat.mentions + 1 else chat.mentions
@@ -203,6 +228,7 @@ class WardCore private constructor(val context: Context) {
     }
 
     suspend fun markRead(chat: ChatEntity) {
+        if (!isChatActive(chat.id)) return
         val msgs = dao.messagesNow(chat.id, 500)
         val lastIn = msgs.lastOrNull { it.direction == 0 }
         val updated = chat.copy(unread = 0, mentions = 0, lastReadId = lastIn?.id ?: chat.lastReadId)
