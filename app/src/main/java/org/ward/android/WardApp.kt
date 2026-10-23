@@ -7,9 +7,11 @@ class WardApp : Application() {
         val previousCode = versionPrefs.getInt("code", 0)
         if (previousCode != BuildConfig.VERSION_CODE) {
             CrashHandler.clear(this)
-            // Builds up to 1.0.6 used the Dino libsignal fork for a while, which could leave a
-            // legacy OMEMO identity that other clients reject. Regenerate the store once.
-            if (previousCode < 9) {
+            // Early pre-release builds (up to 1.0.6) used the Dino libsignal fork for a while,
+            // which could leave a legacy OMEMO identity that other clients reject. The public
+            // version line starts at 1.0.0 / versionCode 1, so keep this migration scoped to the
+            // old development version codes rather than every versionCode below 9.
+            if (previousCode in 2..8) {
                 runCatching { java.io.File(filesDir, "omemo").deleteRecursively() }
                 runCatching { filesDir.listFiles { f -> f.name.startsWith("omemo2-") }?.forEach { it.delete() } }
                 runCatching { java.io.File(filesDir, "reset-legacy-omemo").createNewFile() }

@@ -7,6 +7,6 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 ./gradlew :app:assembleRelease
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
   --ks "${HOME}/.android/debug.keystore" --ks-pass pass:android --key-pass pass:android \
-  --out app/build/outputs/apk/release/ward-1.0.1-android.apk \
+  --out app/build/outputs/apk/release/ward-1.0.0-android.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
-echo "app/build/outputs/apk/release/ward-1.0.1-android.apk"
+echo "app/build/outputs/apk/release/ward-1.0.0-android.apk"

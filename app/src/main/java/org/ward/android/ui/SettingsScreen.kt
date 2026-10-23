@@ -81,7 +81,7 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
                     trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                     modifier = Modifier.clickable { page = "donate" })
             }
-            item { Spacer(Modifier.height(20.dp)); Text("Ward 1.0.11 · XMPP, OMEMO and Markdown", Modifier.padding(16.dp),
+            item { Spacer(Modifier.height(20.dp)); Text("Ward 1.0.0 · XMPP, OMEMO and Markdown", Modifier.padding(16.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
@@ -378,7 +378,7 @@ fun AboutPage(onBack: () -> Unit) {
             Avatar("Ward", 96, "#3584e4")
             Spacer(Modifier.height(14.dp))
             Text("Ward", style = MaterialTheme.typography.headlineMedium)
-            Text("1.0.11 for Android", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("1.0.0 for Android", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(16.dp))
             Text("Private messaging on the open XMPP network, encrypted by default with OMEMO. Markdown messages, groups, calls, files, and a native server administration console for Prosody and ejabberd.",
                 style = MaterialTheme.typography.bodyLarge)
