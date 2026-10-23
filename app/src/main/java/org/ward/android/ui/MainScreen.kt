@@ -53,7 +53,11 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     var overflowMenu by remember { mutableStateOf(false) }
     var settingsPage by remember { mutableStateOf<String?>(null) }
     var addAccountScreen by remember { mutableStateOf(false) }
+    var accountFilter by remember { mutableStateOf<Long?>(null) }
     var passwordFor by remember { mutableStateOf<AccountEntity?>(null) }
+    LaunchedEffect(accounts) {
+        if (accountFilter != null && accounts.none { it.id == accountFilter }) accountFilter = null
+    }
     val currentChat by vm.selectedChatEntity.collectAsState()
     if (addAccountScreen) { WelcomeScreen(vm, onBack = { addAccountScreen = false }); return }
     val showChat = selected != null && currentChat != null
@@ -76,20 +80,40 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box {
                                 TextButton(onClick = { accountMenu = true }) {
-                                    Avatar(accounts.firstOrNull()?.displayName ?: "Ward", 30,
-                                        accounts.firstOrNull()?.color ?: "",
-                                        photo = accounts.firstOrNull()?.avatar ?: "")
+                                    val active = accounts.firstOrNull { it.id == accountFilter } ?: accounts.firstOrNull()
+                                    Avatar(active?.displayName ?: "Ward", 30,
+                                        active?.color ?: "",
+                                        photo = active?.avatar ?: "")
                                 }
                                 DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
+                                    DropdownMenuItem(text = { Text("All accounts") },
+                                        leadingIcon = { if (accountFilter == null) Icon(Icons.Filled.Check, null) else Spacer(Modifier.size(24.dp)) },
+                                        onClick = { accountFilter = null; accountMenu = false })
                                     for (acc in accounts) {
                                         DropdownMenuItem(text = {
                                             Column { Text(acc.displayName, fontWeight = FontWeight.Medium); Text(acc.jid, style = MaterialTheme.typography.bodySmall) }
-                                        }, leadingIcon = { Avatar(acc.displayName, 32, acc.color, show = states[acc.id]?.state?.let { if (it == "online") "available" else "offline" }, photo = acc.avatar) },
-                                            onClick = { accountMenu = false; settingsPage = "account:${acc.id}"; screen = "settings" })
+                                        }, leadingIcon = {
+                                            if (accountFilter == acc.id) Icon(Icons.Filled.Check, null)
+                                            else Avatar(acc.displayName, 32, acc.color,
+                                                show = states[acc.id]?.state?.let { if (it == "online") "available" else "offline" },
+                                                photo = acc.avatar)
+                                        },
+                                            onClick = { accountFilter = acc.id; accountMenu = false })
                                     }
                                     HorizontalDivider()
+                                    DropdownMenuItem(text = { Text("Account settings") },
+                                        leadingIcon = { Icon(Icons.Filled.ManageAccounts, null) },
+                                        onClick = {
+                                            val id = accountFilter ?: accounts.firstOrNull()?.id
+                                            accountMenu = false
+                                            if (id != null) { settingsPage = "account:$id"; screen = "settings" }
+                                        })
+                                    DropdownMenuItem(text = { Text("Manage accounts") },
+                                        leadingIcon = { Icon(Icons.Filled.People, null) },
+                                        onClick = { accountMenu = false; settingsPage = "accounts"; screen = "settings" })
                                     DropdownMenuItem(text = { Text("Add account") }, leadingIcon = { Icon(Icons.Filled.Add, null) },
                                         onClick = { accountMenu = false; addAccountScreen = true })
+                                    HorizontalDivider()
                                     for ((show, label) in listOf("available" to "Available", "away" to "Away", "dnd" to "Busy", "xa" to "Away for a while", "offline" to "Offline")) {
                                         DropdownMenuItem(text = { Text(label) }, leadingIcon = { PresenceDot(show) },
                                             onClick = { accountMenu = false; vm.setPresence(show) })
@@ -119,7 +143,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                 }
             ) { pad ->
                 Box(Modifier.fillMaxSize()) {
-                    ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it }, showArchived, { showArchived = it }, pad,
+                    ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it }, showArchived, { showArchived = it }, accountFilter, pad,
                         onNewChat = { dialog = "new" })
                     if (hasAdmin) {
                         SmallFloatingActionButton(onClick = { screen = "server" }, shape = CircleShape,
@@ -153,10 +177,10 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     }
     }
     if (!showChat) when (dialog) {
-        "new" -> NewChatDialog(vm, onDismiss = { dialog = null })
-        "contact" -> AddContactDialog(vm, onDismiss = { dialog = null })
-        "group" -> NewGroupDialog(vm, onDismiss = { dialog = null })
-        "join" -> JoinGroupDialog(vm, onDismiss = { dialog = null })
+        "new" -> NewChatDialog(vm, accountFilter, onDismiss = { dialog = null })
+        "contact" -> AddContactDialog(vm, accountFilter, onDismiss = { dialog = null })
+        "group" -> NewGroupDialog(vm, accountFilter, onDismiss = { dialog = null })
+        "join" -> JoinGroupDialog(vm, accountFilter, onDismiss = { dialog = null })
     }
 }
 
@@ -164,9 +188,8 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
 fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEntity>, typing: Map<Long, String>,
              states: Map<Long, ConnectionState>, search: String, setSearch: (String) -> Unit,
              filter: String, setFilter: (String) -> Unit, archived: Boolean, setArchived: (Boolean) -> Unit,
-             pad: PaddingValues, onNewChat: () -> Unit) {
+             accountFilter: Long?, pad: PaddingValues, onNewChat: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
-    var accountFilter by remember { mutableStateOf<Long?>(null) }
     var messageResults by remember { mutableStateOf<List<org.ward.android.data.MessageEntity>>(emptyList()) }
     LaunchedEffect(search) {
         if (search.length >= 2) { kotlinx.coroutines.delay(250); messageResults = vm.core.dao.searchAll(search) }
@@ -178,7 +201,9 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
             (filter == "all" || (filter == "unread" && c.unread > 0) || (filter == "people" && !c.isGroup) || (filter == "groups" && c.isGroup)) &&
             (search.isBlank() || c.displayName.contains(search, true) || c.jid.contains(search, true))
     }
-    val offlineAccount = accounts.firstOrNull { states[it.id]?.state != "online" }
+    val offlineAccount = accounts.firstOrNull {
+        (accountFilter == null || it.id == accountFilter) && states[it.id]?.state != "online"
+    }
     Column(Modifier.fillMaxSize().padding(pad)) {
         OutlinedTextField(search, setSearch, placeholder = { Text("Search chats") }, leadingIcon = { Icon(Icons.Filled.Search, null) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), singleLine = true,
@@ -190,12 +215,13 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
             Spacer(Modifier.weight(1f))
             IconToggleButton(checked = archived, onCheckedChange = setArchived) { Icon(Icons.Filled.Folder, "Archived") }
         }
-        if (requests.isNotEmpty()) {
-            Card(onClick = { vm.selectChat(requests.first().chatId) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        val shownRequests = requests.filter { accountFilter == null || it.accountId == accountFilter }
+        if (shownRequests.isNotEmpty()) {
+            Card(onClick = { vm.selectChat(shownRequests.first().chatId) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.MarkEmailUnread, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(10.dp))
-                    Text("${requests.size} message request${if (requests.size == 1) "" else "s"}", modifier = Modifier.weight(1f))
+                    Text("${shownRequests.size} message request${if (shownRequests.size == 1) "" else "s"}", modifier = Modifier.weight(1f))
                     Text("Review", color = MaterialTheme.colorScheme.primary)
                 }
             }
@@ -269,11 +295,13 @@ fun ContactsTab(vm: AppViewModel, contacts: List<ContactEntity>, pad: PaddingVal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewChatDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
     val contacts by vm.contacts.collectAsState()
     var jid by remember { mutableStateOf("") }
-    var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id ?: 0L) }
+    var accountId by remember(initialAccountId, accounts.map { it.id }) {
+        mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
+    }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("New chat") }, text = {
         Column {
             if (accounts.size > 1) {
@@ -305,11 +333,13 @@ fun NewChatDialog(vm: AppViewModel, onDismiss: () -> Unit) {
 }
 
 @Composable
-fun AddContactDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
     var jid by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
-    var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id ?: 0L) }
+    var accountId by remember(initialAccountId, accounts.map { it.id }) {
+        mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
+    }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Add contact") }, text = {
         Column {
             if (accounts.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -330,15 +360,26 @@ fun AddContactDialog(vm: AppViewModel, onDismiss: () -> Unit) {
 }
 
 @Composable
-fun NewGroupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+fun NewGroupDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
+    val contacts by vm.contacts.collectAsState()
+    var invitees by remember { mutableStateOf<Set<String>>(emptySet()) }
     var name by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var private by remember { mutableStateOf(true) }
-    var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id ?: 0L) }
+    var accountId by remember(initialAccountId, accounts.map { it.id }) {
+        mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
+    }
     var address by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("New group") }, text = {
         Column {
+            if (accounts.size > 1) {
+                Text("Account", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id }, label = { Text(a.displayName) }) }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(description, { description = it }, label = { Text("Description (optional)") }, singleLine = true)
@@ -346,6 +387,25 @@ fun NewGroupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(private, { private = it }); Text("Private group") }
             Text(if (private) "Only invited members; messages can be end-to-end encrypted" else "Anyone can find and join; not encrypted",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (private) {
+                Spacer(Modifier.height(8.dp))
+                Text("Invite members", style = MaterialTheme.typography.labelMedium)
+                val choices = contacts.filter {
+                    it.inRoster && it.accountId == accountId && it.jid != accounts.firstOrNull { a -> a.id == accountId }?.jid
+                }
+                LazyColumn(Modifier.heightIn(max = 180.dp)) {
+                    items(choices, key = { it.jid }) { c ->
+                        Row(Modifier.fillMaxWidth().clickable {
+                            invitees = if (c.jid in invitees) invitees - c.jid else invitees + c.jid
+                        }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(c.jid in invitees, onCheckedChange = {
+                                invitees = if (it) invitees + c.jid else invitees - c.jid
+                            })
+                            Column { Text(c.name, style = MaterialTheme.typography.bodyMedium); Text(c.jid, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(address, { address = it }, label = { Text("Address (optional)") }, singleLine = true)
         }
@@ -353,19 +413,28 @@ fun NewGroupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
         TextButton(onClick = {
             if (name.isBlank() || accountId == 0L) return@TextButton
             val room = address.ifBlank { name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-') + "@conference." + accounts.first { it.id == accountId }.domain }
-            vm.createGroup(accountId, room, name, private, description, emptyList())
+            vm.createGroup(accountId, room, name, private, description, if (private) invitees.toList() else emptyList())
             onDismiss()
         }) { Text("Create") }
     }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @Composable
-fun JoinGroupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+fun JoinGroupDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
     var address by remember { mutableStateOf("") }
-    var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id ?: 0L) }
+    var accountId by remember(initialAccountId, accounts.map { it.id }) {
+        mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
+    }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Join group or channel") }, text = {
         Column {
+            if (accounts.size > 1) {
+                Text("Account", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id }, label = { Text(a.displayName) }) }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             OutlinedTextField(address, { address = it }, label = { Text("Address") }, singleLine = true)
             Text("Enter the group's address, like team@groups.example.org", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)

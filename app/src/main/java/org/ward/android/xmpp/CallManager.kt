@@ -145,6 +145,10 @@ class CallManager(private val session: XmppSession) {
         finish()
     }
 
+    private fun coreLog(message: String) {
+        session.core.addXmlLog(session.account.id, false, message)
+    }
+
     private fun setAudioMode(inCall: Boolean) {
         val am = context.getSystemService(android.media.AudioManager::class.java)
         if (inCall) {
@@ -578,8 +582,14 @@ class CallManager(private val session: XmppSession) {
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-            if (session.core.settings.bool("calls.relay_only")) {
+            val relayRequested = session.core.settings.bool("calls.relay_only")
+            val turnAvailable = servers.any { server ->
+                server.urls.any { it.startsWith("turn:", ignoreCase = true) || it.startsWith("turns:", ignoreCase = true) }
+            }
+            if (relayRequested && turnAvailable) {
                 iceTransportsType = PeerConnection.IceTransportsType.RELAY
+            } else if (relayRequested) {
+                coreLog("Always relay is on, but the server/manual settings provided no TURN service; allowing direct ICE")
             }
         }
         val pc = f.createPeerConnection(cfg, object : PeerConnection.Observer {

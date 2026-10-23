@@ -96,7 +96,7 @@ object SettingsSchema {
         t("calls.turn_password", "TURN password", "", "calls", "Network"),
         t("calls.turn_secret", "TURN shared secret", "For time-limited credentials, as used by coturn and eturnal", "calls", "Network", "", true),
         i("calls.turn_ttl", "TURN credential lifetime", "Seconds; used with the shared secret", "calls", "Network", 86400, 300, 604800, 3600, "seconds", true),
-        b("calls.relay_only", "Always relay calls", "Use TURN even when a direct connection is possible", "calls", "Network", false, true),
+        b("calls.relay_only", "Always relay calls", "Use TURN even when a direct connection is possible", "calls", "Network", true, true),
         t("calls.ringtone", "Ringtone", "System ringtone; empty uses the default", "calls", "Sounds"),
         t("calls.ringback", "Calling tone", "System tone; empty uses the default", "calls", "Sounds"),
 

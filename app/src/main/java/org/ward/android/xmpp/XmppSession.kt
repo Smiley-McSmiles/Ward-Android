@@ -1135,7 +1135,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 setupMuc(muc, chat)
                 core.dao.updateChat(chat.copy(joined = true, name = name, subject = description,
                     ourNick = muc.nickname?.toString() ?: "", memberCount = muc.occupantsCount,
-                    encryption = if (preset == "private") "omemo" else "off"))
+                    encryption = if (preset == "private" && core.settings.bool("encryption.legacy_omemo")) "omemo" else "off"))
                 saveAutojoin(chat)
             } catch (e: Exception) {
                 core.dao.updateChat(chat.copy(joined = false, joinError = friendlyError(e)))
@@ -1262,6 +1262,14 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         return sb.toString()
     }
 
+    private fun ensureLegacyManager(): OmemoManager? {
+        omemo?.let { return it }
+        if (!core.settings.bool("encryption.legacy_omemo")) return null
+        val conn = connection ?: return null
+        if (!omemoReady) setupOmemo(conn)
+        return omemo
+    }
+
     private suspend fun tryEncrypt(chat: ChatEntity, entity: MessageEntity): EncryptedPayload? {
         if (chat.encryption == "off") return null
         if (chat.encryption == "pgp") {
@@ -1297,8 +1305,12 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             if (force2) throw IllegalStateException(
                 "This contact has no OMEMO 2 devices. Ask them to enable OMEMO 2, or choose Legacy OMEMO in Details.")
         }
-        val mgr = omemo ?: throw IllegalStateException("OMEMO is not ready on this device yet. Try again in a moment.")
-        if (!omemoReady) throw IllegalStateException("OMEMO is still starting. Try again in a moment.")
+        if (!core.settings.bool("encryption.legacy_omemo")) {
+            throw IllegalStateException("Legacy OMEMO is turned off in Settings → Encryption")
+        }
+        val mgr = ensureLegacyManager()
+            ?: throw IllegalStateException("Legacy OMEMO is not ready on this device yet. Try again in a moment.")
+        if (!omemoReady) throw IllegalStateException("Legacy OMEMO is still starting. Try again in a moment.")
         return try {
             if (chat.isGroup) {
                 val muc = rooms[chat.jid] ?: throw IllegalStateException("Not in the group yet")

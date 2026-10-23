@@ -115,8 +115,8 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
         LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = 30.dp)) {
             if (key == "calls") {
                 item { ListItem(headlineContent = { Text("Audio and video calls") },
-                    supportingContent = { Text("Call signaling and media are not available in this build yet. The settings below apply to the future call engine.") },
-                    leadingContent = { Icon(Icons.Filled.Info, null) }) }
+                    supportingContent = { Text("Calls use Jingle signaling and WebRTC media. STUN/TURN is discovered from the server when available.") },
+                    leadingContent = { Icon(Icons.Filled.Call, null) }) }
             }
             if (key == "accounts") {
                 item { AccountListSettings(vm, accounts, states, onAddAccount) }
