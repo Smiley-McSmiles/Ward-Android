@@ -1,0 +1,4 @@
+-keep class org.igniterealtime.smack.** { *; }
+-keep class org.jivesoftware.smack.** { *; }
+-keep class org.whispersystems.** { *; }
+-dontwarn org.bouncycastle.**
