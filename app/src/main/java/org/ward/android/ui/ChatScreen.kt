@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -602,8 +603,10 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
         Column(Modifier.padding(bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                val tone = vm.settings.string("chats.reaction_skin_tone", "")
                 for (e in vm.settings.list("chats.quick_reactions").ifEmpty { listOf("👍", "❤️", "😂", "😮", "😢", "🎉") }) {
-                    TextButton(onClick = { vm.react(msg, e); onDismiss() }) { Text(e, fontSize = 26.sp) }
+                    val reaction = applySkinTone(e, tone)
+                    TextButton(onClick = { vm.react(msg, reaction); onDismiss() }) { Text(reaction, fontSize = 26.sp) }
                 }
                 IconButton(onClick = { emojiPicker = true }) {
                     Icon(Icons.Filled.AddReaction, "More reactions")
@@ -624,7 +627,7 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
         }
     }
     if (emojiPicker) {
-        EmojiPickerDialog(onDismiss = { emojiPicker = false }) { emoji ->
+        EmojiPickerDialog(vm, onDismiss = { emojiPicker = false }) { emoji ->
             emojiPicker = false
             vm.react(msg, emoji)
             onDismiss()
@@ -637,34 +640,54 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
 }
 
 @Composable
-private fun EmojiPickerDialog(onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    var tone by remember { mutableStateOf("") }
+private fun EmojiPickerDialog(vm: AppViewModel, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    var tone by remember { mutableStateOf(vm.settings.string("chats.reaction_skin_tone", "")) }
+    var toneMenu by remember { mutableStateOf(false) }
     val tones = listOf(
         "" to "\u270B", "\uD83C\uDFFB" to "\u270B\uD83C\uDFFB", "\uD83C\uDFFC" to "\u270B\uD83C\uDFFC",
         "\uD83C\uDFFD" to "\u270B\uD83C\uDFFD", "\uD83C\uDFFE" to "\u270B\uD83C\uDFFE",
         "\uD83C\uDFFF" to "\u270B\uD83C\uDFFF"
     )
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(24.dp),
             tonalElevation = 6.dp) {
             Column(Modifier.padding(16.dp)) {
-                Text("Choose a reaction", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(10.dp))
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Choose a reaction", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     Text("Skin tone", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    for ((value, label) in tones) {
-                        FilterChip(selected = tone == value, onClick = { tone = value },
-                            label = { Text(label, fontSize = 20.sp) })
+                    Spacer(Modifier.width(6.dp))
+                    Box {
+                        TextButton(onClick = { toneMenu = true }) {
+                            Text(tones.firstOrNull { it.first == tone }?.second ?: "\u270B", fontSize = 22.sp)
+                            Icon(Icons.Filled.ArrowDropDown, "Choose skin tone")
+                        }
+                        DropdownMenu(expanded = toneMenu, onDismissRequest = { toneMenu = false }) {
+                            for ((value, label) in tones) {
+                                DropdownMenuItem(
+                                    text = { Text(label, fontSize = 24.sp) },
+                                    trailingIcon = {
+                                        if (tone == value) Icon(Icons.Filled.Check, "Selected")
+                                    },
+                                    onClick = {
+                                        tone = value
+                                        vm.settings.set("chats.reaction_skin_tone", value)
+                                        toneMenu = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 AndroidView(
                     factory = { ctx ->
-                        androidx.emoji2.emojipicker.EmojiPickerView(ctx).apply {
+                        val themed = android.view.ContextThemeWrapper(ctx,
+                            if (dark) android.R.style.Theme_Material_NoActionBar
+                            else android.R.style.Theme_Material_Light_NoActionBar)
+                        androidx.emoji2.emojipicker.EmojiPickerView(themed).apply {
                             emojiGridColumns = 8
                             setOnEmojiPickedListener { item ->
                                 onPick(applySkinTone(item.emoji, tone))

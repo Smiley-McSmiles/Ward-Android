@@ -30,8 +30,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
@@ -122,7 +120,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
             }
             else Text(if (failed) "Could not load image" else name, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
-        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, ::saveFile)
+        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, mime, ::saveFile)
         mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url, ::saveFile)
         else -> {
             Row(Modifier.combinedClickable(
@@ -155,7 +153,8 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
 
 @Composable
 private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
-                            progress: Float?, size: Long, encrypted: Boolean, onLongClick: () -> Unit) {
+                            progress: Float?, size: Long, encrypted: Boolean, mime: String,
+                            onLongClick: () -> Unit) {
     if (file == null) {
         Box(Modifier.widthIn(max = 290.dp).fillMaxWidth().height(150.dp)
             .clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
@@ -182,27 +181,9 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
     LaunchedEffect(file) {
         aspect = withContext(Dispatchers.IO) { videoAspect(file) }
     }
-    var fullscreen by remember { mutableStateOf(false) }
-    var position by remember { mutableIntStateOf(0) }
-    var playing by remember { mutableStateOf(false) }
-
-    if (fullscreen) {
-        Dialog(onDismissRequest = { fullscreen = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-            Box(Modifier.fillMaxSize().background(Color.Black)
-                .windowInsetsPadding(WindowInsets.safeDrawing)) {
-                VideoSurface(file = file, startPosition = position, autoPlay = playing,
-                    aspect = aspect, fullscreen = true, onLongClick = onLongClick,
-                    onState = { p, isPlaying -> position = p; playing = isPlaying },
-                    onToggleFullscreen = { fullscreen = false })
-            }
-        }
-    } else {
-        VideoSurface(file = file, startPosition = position, autoPlay = playing,
-            aspect = aspect, fullscreen = false, onLongClick = onLongClick,
-            onState = { p, isPlaying -> position = p; playing = isPlaying },
-            onToggleFullscreen = { fullscreen = true })
-    }
+    val context = LocalContext.current
+    VideoSurface(file = file, aspect = aspect, onLongClick = onLongClick,
+        onOpenExternal = { openWithDefaultApp(context, file, mime) })
 
     Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(name, fontSize = 11.sp, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -215,16 +196,15 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
 }
 
 @Composable
-private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
-                         aspect: Float, fullscreen: Boolean, onLongClick: () -> Unit,
-                         onState: (Int, Boolean) -> Unit, onToggleFullscreen: () -> Unit) {
+private fun VideoSurface(file: File, aspect: Float, onLongClick: () -> Unit,
+                         onOpenExternal: () -> Unit) {
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var surface by remember { mutableStateOf<Surface?>(null) }
     var playing by remember { mutableStateOf(false) }
     var prepared by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var duration by remember { mutableIntStateOf(0) }
-    var position by remember { mutableIntStateOf(startPosition) }
+    var position by remember { mutableIntStateOf(0) }
     var scrubbing by remember { mutableStateOf(false) }
     val ratio = aspect
 
@@ -243,23 +223,14 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
             val d = runCatching { v.duration }.getOrDefault(duration)
             if (d > 0) duration = d
             position = p
-            onState(p, true)
             delay(500)
         }
     }
 
     // Inline videos use the full width of the bubble and as much height as their aspect ratio
     // needs. Capping the height cut portrait videos off at the top and bottom.
-    val frame = if (fullscreen) Modifier.fillMaxSize()
-    else Modifier.widthIn(max = 290.dp).fillMaxWidth().aspectRatio(ratio)
-    BoxWithConstraints(frame.clip(RoundedCornerShape(if (fullscreen) 0.dp else 8.dp))
-        .background(Color.Black)) {
-        val videoModifier = if (fullscreen) {
-            // Fit the whole video inside the screen without changing its aspect ratio.
-            if (aspect >= maxWidth.value / maxHeight.value.coerceAtLeast(1f))
-                Modifier.fillMaxWidth().aspectRatio(aspect)
-            else Modifier.fillMaxHeight().aspectRatio(aspect)
-        } else Modifier.fillMaxSize()
+    val frame = Modifier.widthIn(max = 290.dp).fillMaxWidth().aspectRatio(ratio)
+    Box(frame.clip(RoundedCornerShape(8.dp)).background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
                 TextureView(ctx).apply {
@@ -275,22 +246,14 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
                                 mp.setOnPreparedListener { preparedPlayer ->
                                     prepared = true
                                     duration = preparedPlayer.duration
-                                    if (startPosition > 0) preparedPlayer.seekTo(startPosition)
-                                    if (autoPlay) {
-                                        preparedPlayer.start()
-                                        playing = true
-                                        onState(startPosition, true)
-                                    }
                                 }
                                 mp.setOnCompletionListener {
                                     playing = false
                                     position = duration
-                                    onState(duration, false)
                                 }
                                 mp.setOnErrorListener { _, _, _ ->
                                     failed = true
                                     playing = false
-                                    onState(position, false)
                                     true
                                 }
                                 mp.prepareAsync()
@@ -310,16 +273,11 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
                     }
                 }
             },
-            modifier = videoModifier.align(Alignment.Center)
+            modifier = Modifier.fillMaxSize()
         )
         // Interop views can swallow Compose gestures. Put a transparent gesture layer over the
         // video so long-press-to-save works everywhere except on the controls above it.
         Box(Modifier.matchParentSize().combinedClickable(onClick = {}, onLongClick = onLongClick))
-        if (fullscreen) {
-            IconButton(onClick = onToggleFullscreen, modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)) {
-                Icon(Icons.Filled.Close, "Minimize", tint = Color.White)
-            }
-        }
         if (!prepared && !failed) {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(30.dp), strokeWidth = 2.dp)
         }
@@ -329,15 +287,13 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.7f))
-            .then(if (fullscreen) Modifier.navigationBarsPadding() else Modifier)
-            .padding(horizontal = 6.dp, vertical = if (fullscreen) 6.dp else 2.dp)) {
+            .padding(horizontal = 6.dp, vertical = 2.dp)) {
             Slider(
                 value = position.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()),
                 onValueChange = { scrubbing = true; position = it.toInt() },
                 onValueChangeFinished = {
                     if (prepared) player?.seekTo(position)
                     scrubbing = false
-                    onState(position, playing)
                 },
                 valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
                 enabled = duration > 0,
@@ -355,7 +311,6 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
                         }
                         v.start(); playing = true
                     }
-                    onState(position, playing)
                 }, modifier = Modifier.size(32.dp)) {
                     Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         if (playing) "Pause" else "Play", Modifier.size(21.dp), tint = Color.White)
@@ -365,16 +320,18 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
                     if (!prepared) return@IconButton
                     v.pause(); v.seekTo(0)
                     playing = false; position = 0
-                    onState(0, false)
                 }, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Filled.Stop, "Stop", Modifier.size(19.dp), tint = Color.White)
                 }
                 Text("${formatDuration(position)} / ${formatDuration(duration)}", color = Color.White,
                     fontSize = 10.sp, maxLines = 1)
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(32.dp)) {
-                    Icon(if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                        if (fullscreen) "Minimize" else "Maximize", Modifier.size(21.dp), tint = Color.White)
+                IconButton(onClick = {
+                    player?.pause()
+                    playing = false
+                    onOpenExternal()
+                }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.OpenInNew, "Open in video player", Modifier.size(21.dp), tint = Color.White)
                 }
             }
         }
