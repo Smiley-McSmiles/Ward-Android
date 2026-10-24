@@ -1807,6 +1807,25 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }
     }
 
+    /**
+     * Publish a legacy OMEMO device list that contains only this device. Old installs and resets
+     * otherwise accumulate in the list, and every contact keeps encrypting new messages for them.
+     */
+    suspend fun cleanUpLegacyDevices(): String = withContext(Dispatchers.IO) {
+        val mgr = omemo ?: return@withContext "OMEMO is not connected"
+        runCatching {
+            mgr.purgeDeviceList()
+            val ownId = mgr.ownDevice.deviceId
+            for (d in core.dao.devicesOnce(account.id, account.jid)) {
+                if (d.protocol == "omemo" && d.deviceId != ownId.toLong()) {
+                    core.dao.deleteDevice(account.id, account.jid, d.deviceId, d.protocol)
+                }
+            }
+            core.addXmlLog(account.id, false, "Published a legacy OMEMO device list containing only device $ownId")
+            "Legacy OMEMO device list now contains only this device. Contacts should refresh the chat or reopen it."
+        }.getOrElse { "Could not clean up devices: ${it.message}" }
+    }
+
     fun refreshOmemoDevices(jid: String) {
         val o2 = omemo2 ?: return
         o2.invalidateDeviceCache(jid)

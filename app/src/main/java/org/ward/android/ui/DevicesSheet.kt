@@ -8,6 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.*
@@ -41,6 +42,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
     var pendingImportTrust by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var cleanConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -149,6 +151,13 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                             AppLockStore.beginExternalActivity()
                             importFile.launch(arrayOf("application/octet-stream", "*/*"))
                         })
+                    Spacer(Modifier.height(6.dp))
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("Clean up old legacy devices…") },
+                        supportingContent = { Text("Keep only this device in your published OMEMO 0.3 device list") },
+                        leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },
+                        modifier = Modifier.clickable { cleanConfirm = true })
                     if (busy) {
                         Spacer(Modifier.height(8.dp))
                         LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -162,6 +171,29 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
         }
     }
 
+    if (cleanConfirm) {
+        AlertDialog(onDismissRequest = { cleanConfirm = false },
+            title = { Text("Clean up old legacy devices?") },
+            text = { Text("This publishes a legacy OMEMO (0.3) device list containing only this phone. " +
+                "Old installs and resets will stop receiving new messages. Contacts may need to reopen the chat " +
+                "so they fetch the new list. OMEMO 2 devices are not affected.") },
+            confirmButton = {
+                TextButton(enabled = !busy, onClick = {
+                    cleanConfirm = false
+                    busy = true
+                    message = ""
+                    scope.launch {
+                        val result = runCatching {
+                            vm.core.session(accountId)?.cleanUpLegacyDevices() ?: "Not connected"
+                        }.getOrElse { it.message ?: "Could not clean up devices" }
+                        busy = false
+                        message = result
+                        vm.loadDevices(accountId, jid)
+                    }
+                }) { Text("Clean up") }
+            },
+            dismissButton = { TextButton(onClick = { cleanConfirm = false }) { Text("Cancel") } })
+    }
     if (forget != null) {
         val d = forget!!
         AlertDialog(onDismissRequest = { forget = null }, title = { Text("Forget device ${d.deviceId}?") },
