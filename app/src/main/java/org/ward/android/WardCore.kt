@@ -390,6 +390,7 @@ class WardCore private constructor(val context: Context) {
         val entry = XmlLogEntry(System.currentTimeMillis(), accountId, incoming, text)
         _xml.value = (_xml.value + entry).takeLast(500)
     }
+    fun clearXml() { _xml.value = emptyList() }
     private val _call = MutableStateFlow<org.ward.android.xmpp.CallUiState?>(null)
     val call: StateFlow<org.ward.android.xmpp.CallUiState?> = _call
     fun setCallState(state: org.ward.android.xmpp.CallUiState?) { _call.value = state }

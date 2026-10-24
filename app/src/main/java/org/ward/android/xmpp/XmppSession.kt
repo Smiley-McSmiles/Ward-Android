@@ -73,6 +73,11 @@ data class OccupantInfo(val nick: String, val jid: String, val role: String, val
                         val status: String = "", val isSelf: Boolean = false)
 
 class XmppSession(internal val core: WardCore, var account: AccountEntity, private val password: String) {
+    companion object {
+        private val omemoSetupLock = Any()
+        @Volatile private var signalOmemoSetupDone = false
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var running = false
     @Volatile var connection: XMPPTCPConnection? = null
@@ -435,13 +440,28 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             resetFlag.delete()
         }
         try {
-            SignalOmemoService.acknowledgeLicense()
-            SignalOmemoService.setup()
-            val service = SignalOmemoService.getInstance()
+            // SignalOmemoService registers itself globally with Smack. Calling setup() a second
+            // time (multiple accounts, a reconnect, or the legacy retry path) throws
+            // "An OmemoService is already registered." Set it up once per process instead.
+            val service = synchronized(omemoSetupLock) {
+                if (!signalOmemoSetupDone) {
+                    SignalOmemoService.acknowledgeLicense()
+                    try {
+                        SignalOmemoService.setup()
+                    } catch (e: Exception) {
+                        if (e.message?.contains("already registered", ignoreCase = true) != true) throw e
+                        core.addXmlLog(account.id, false, "OMEMO service was already registered; reusing it")
+                    }
+                    signalOmemoSetupDone = true
+                }
+                SignalOmemoService.getInstance()
+            }
             val root = File(core.context.filesDir, "omemo")
-            if (service.omemoStoreBackend == null) {
-                val setter = service.javaClass.methods.firstOrNull { it.name == "setOmemoStoreBackend" }
-                setter?.invoke(service, SignalFileBasedOmemoStore(root))
+            synchronized(omemoSetupLock) {
+                if (service.omemoStoreBackend == null) {
+                    val setter = service.javaClass.methods.firstOrNull { it.name == "setOmemoStoreBackend" }
+                    setter?.invoke(service, SignalFileBasedOmemoStore(root))
+                }
             }
             OmemoConfiguration.setAddOmemoHintBody(false)
             val mgr = OmemoManager.getInstanceFor(conn)

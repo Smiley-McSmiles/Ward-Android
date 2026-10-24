@@ -328,15 +328,31 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
     var accountId by remember { mutableStateOf(accounts.firstOrNull { vm.core.isOnline(it.id) }?.id ?: accounts.firstOrNull()?.id ?: 0L) }
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    var paused by remember { mutableStateOf(false) }
+    var frozen by remember { mutableStateOf<List<org.ward.android.XmlLogEntry>>(emptyList()) }
+    val context = LocalContext.current
     val listState = rememberLazyListState()
-    val filteredLog = log.filter { it.accountId == accountId }
-    LaunchedEffect(filteredLog.size, accountId) {
-        if (filteredLog.isNotEmpty()) {
+    val filteredLog = (if (paused) frozen else log).filter { it.accountId == accountId }
+    LaunchedEffect(filteredLog.size, accountId, paused) {
+        if (!paused && filteredLog.isNotEmpty()) {
             runCatching { listState.scrollToItem(filteredLog.lastIndex) }
         }
     }
     Scaffold(topBar = { TopAppBar(title = { Text("XML console") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null) } },
-        actions = { IconButton(onClick = { vm.core.scope.launch { } }) { Icon(Icons.Filled.DeleteSweep, "Clear") } }) }) { pad ->
+        actions = {
+            IconButton(onClick = {
+                paused = !paused
+                frozen = if (paused) log else emptyList()
+            }) { Icon(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "Resume" else "Pause") }
+            IconButton(onClick = {
+                context.copyText(filteredLog.joinToString("\n\n") { (if (it.incoming) "← " else "→ ") + it.text })
+                android.widget.Toast.makeText(context, "Console copied", android.widget.Toast.LENGTH_SHORT).show()
+            }) { Icon(Icons.Filled.ContentCopy, "Copy console") }
+            IconButton(onClick = {
+                vm.core.clearXml()
+                frozen = emptyList()
+            }) { Icon(Icons.Filled.DeleteSweep, "Clear") }
+        }) }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             if (accounts.size > 1) Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id }, label = { Text(a.domain) }) }
@@ -345,7 +361,10 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
                 itemsIndexed(filteredLog, key = { i, e -> "$i:${e.time}:${e.text.hashCode()}" }) { i, e ->
                     Text((if (e.incoming) "← " else "→ ") + e.text, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                         color = if (e.incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable {
+                            context.copyText(e.text)
+                            android.widget.Toast.makeText(context, "Stanza copied", android.widget.Toast.LENGTH_SHORT).show()
+                        })
                 }
             }
             OutlinedTextField(text, { text = it }, label = { Text("Raw stanza XML") }, minLines = 2, maxLines = 5,
