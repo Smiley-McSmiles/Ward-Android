@@ -201,7 +201,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         if (host.isNotBlank()) builder.setHost(host).setPort(opt("port", "5222").toIntOrNull() ?: 5222)
         else if (opt("port").isNotBlank()) builder.setPort(opt("port").toInt())
         builder.setResource(opt("resource", "Ward Android").ifBlank { "Ward Android" })
-        val conn = XMPPTCPConnection(builder.build())
+        val conn = WardXmppConnection(builder.build()) { message ->
+            core.addXmlLog(account.id, true, message)
+        }
         connection = conn
         conn.addConnectionListener(object : AbstractConnectionListener() {
             override fun connected(c: XMPPConnection) {
