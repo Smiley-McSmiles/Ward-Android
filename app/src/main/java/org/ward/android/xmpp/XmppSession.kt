@@ -820,8 +820,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             if (timestamp <= chatNow.clearedAt) return@launch
             if (!chatNow.open) core.dao.updateChat(chatNow.copy(open = true))
             val name = contactName(chatNow, from)
-            val cleanBody = if (attachments.any { it.url.startsWith("aesgcm://") })
-                body.substringBefore("aesgcm://").trim().ifBlank { attachments.first().name } else body
+            val cleanBody = bodyWithoutAttachmentUrls(body, attachments)
             val msgEntity = MessageEntity(chatId = chatNow.id, stanzaId = stanzaId,
                 originId = msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: "",
                 msgId = msg.stanzaId ?: "", sender = jid, senderJid = from.toString(), senderName = name,
@@ -1134,8 +1133,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             }
             if (body.isBlank()) return@launch
             val occ = msg.from?.asEntityFullJidIfPossible()?.let { muc.getOccupant(it)?.jid?.toString() } ?: ""
-            val cleanBody = if (attachments.any { it.url.startsWith("aesgcm://") })
-                body.substringBefore("aesgcm://").trim().ifBlank { attachments.first().name } else body
+            val cleanBody = bodyWithoutAttachmentUrls(body, attachments)
             val msgEntity = MessageEntity(chatId = chat.id, stanzaId = stanzaId,
                 originId = msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: "", msgId = msg.stanzaId ?: "",
                 sender = nick, senderJid = occ, senderName = nick, direction = if (nick == muc.nickname?.toString()) 1 else 0,

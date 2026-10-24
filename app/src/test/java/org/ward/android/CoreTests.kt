@@ -16,9 +16,32 @@ import org.ward.android.xmpp.JingleSdp
 import org.ward.android.xmpp.RawJingleIq
 import org.ward.android.xmpp.OpenPgp
 import org.ward.android.xmpp.attachments
+import org.ward.android.xmpp.attachmentsFromBody
+import org.ward.android.xmpp.bodyWithoutAttachmentUrls
+import org.ward.android.xmpp.guessMime
 import java.io.File
 
 class CoreTests {
+    @Test fun mediaUrlsInMessageBodyBecomeAttachments() {
+        val body = "Look at this\nhttps://upload.example.org/file.mp4?token=abc"
+        val atts = attachmentsFromBody(body)
+        assertEquals(1, atts.size)
+        assertEquals("video/mp4", atts[0].mime)
+        assertEquals("file.mp4", atts[0].name)
+        assertEquals("Look at this", bodyWithoutAttachmentUrls(body, atts))
+
+        val encrypted = attachmentsFromBody("Clip\naesgcm://upload.example.org/clip.mp4.enc#abcdef")
+        assertEquals(1, encrypted.size)
+        assertEquals("video/mp4", encrypted[0].mime)
+        assertEquals("Clip", bodyWithoutAttachmentUrls("Clip\naesgcm://upload.example.org/clip.mp4.enc#abcdef", encrypted))
+    }
+
+    @Test fun ordinaryLinksAndAudioFormats() {
+        assertTrue(attachmentsFromBody("https://example.org/article").isEmpty())
+        assertEquals("audio/mpeg", guessMime("https://example.org/song.mp3"))
+        assertEquals("video/x-matroska", guessMime("https://example.org/film.mkv"))
+        assertEquals("video/webm", guessMime("https://example.org/clip.webm"))
+    }
     @Test fun aesgcmFileRoundTrip() {
         val dir = kotlin.io.path.createTempDirectory().toFile()
         val src = File(dir, "hello.txt").apply { writeText("Ward encrypted file test") }

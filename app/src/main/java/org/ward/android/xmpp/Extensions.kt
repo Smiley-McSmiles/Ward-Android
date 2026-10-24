@@ -192,22 +192,61 @@ fun Message.attachments(): List<ParsedAttachments> {
 }
 
 fun attachmentsFromBody(body: String): List<ParsedAttachments> {
-    val aes = Regex("aesgcm://\\S+").find(body) ?: return emptyList()
-    val url = aes.value
-    val name = body.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("aesgcm://") }
-        ?: url.substringAfterLast('/').substringBefore('#')
-    return listOf(ParsedAttachments(url, name, guessMime(name), 0, 0, 0))
+    val out = mutableListOf<ParsedAttachments>()
+    val aes = Regex("aesgcm://\\S+").find(body)
+    if (aes != null) {
+        val url = aes.value.trimEnd('.', ',', ';', ':', '!', ')', ']', '}')
+        val name = body.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("aesgcm://") }
+            ?: url.substringAfterLast('/').substringBefore('#')
+        // An encrypted upload may be named file.mp4.enc; use the name in the body first, then the
+        // URL path, so the media player still knows this is a video.
+        val mime = guessMime(name).takeUnless { it == "application/octet-stream" }
+            ?: guessMime(url.substringAfter("aesgcm://").substringBefore('#'))
+        return listOf(ParsedAttachments(url, name, mime, 0, 0, 0))
+    }
+    // Other clients often share media as a plain HTTPS link with no file-sharing extension.
+    // Recognise only URLs whose path has a known video or audio extension: an ordinary web link
+    // should stay a link, not turn into an attachment.
+    val urls = Regex("""https?://[^\s<>"']+""", RegexOption.IGNORE_CASE).findAll(body)
+    for (match in urls) {
+        val url = match.value.trimEnd('.', ',', ';', ':', '!', ')', ']', '}')
+        val mime = guessMime(url)
+        if (!mime.startsWith("video/") && !mime.startsWith("audio/")) continue
+        val clean = url.substringBefore('?').substringBefore('#')
+        val name = clean.substringAfterLast('/').ifBlank { "attachment.${clean.substringAfterLast('.', "bin")}" }
+        if (out.none { it.url == url }) out.add(ParsedAttachments(url, name, mime, 0, 0, 0))
+    }
+    return out
 }
 
 fun guessMime(name: String): String {
-    val ext = name.substringAfterLast('.', "").lowercase()
+    val clean = name.substringBefore('?').substringBefore('#').substringAfterLast('/')
+    val rawExt = clean.substringAfterLast('.', "").lowercase()
+    // Encrypted uploads from Ward and Cheogram often end in .enc. Look at the real extension
+    // underneath it so the chat can play the decrypted file.
+    val ext = if (rawExt == "enc") clean.removeSuffix(".enc").substringAfterLast('.', "").lowercase() else rawExt
     return when (ext) {
         "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"
-        "webp" -> "image/webp"; "heic" -> "image/heic"; "mp4" -> "video/mp4"
+        "webp" -> "image/webp"; "heic" -> "image/heic"; "bmp" -> "image/bmp"
+        "mp4", "m4v" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"
+        "mov" -> "video/quicktime"; "avi" -> "video/x-msvideo"; "3gp" -> "video/3gpp"
+        "3g2" -> "video/3gpp2"; "mpg", "mpeg" -> "video/mpeg"; "ts", "m2ts" -> "video/mp2t"
+        "ogv" -> "video/ogg"
         "m4a", "aac" -> "audio/mp4"; "ogg", "oga", "opus" -> "audio/ogg"; "mp3" -> "audio/mpeg"
+        "wav" -> "audio/wav"; "flac" -> "audio/flac"; "amr" -> "audio/amr"; "weba" -> "audio/webm"
         "pdf" -> "application/pdf"; "txt" -> "text/plain"
         else -> "application/octet-stream"
     }
+}
+
+/** Remove a media URL from displayed text when that URL is already rendered as an attachment. */
+fun bodyWithoutAttachmentUrls(body: String, attachments: List<ParsedAttachments>): String {
+    if (attachments.isEmpty()) return body
+    val aes = attachments.firstOrNull { it.url.startsWith("aesgcm://") }
+    if (aes != null) return body.substringBefore("aesgcm://").trim().ifBlank { aes.name }
+    var rest = body
+    for (a in attachments) if (a.url in rest) rest = rest.replace(a.url, "")
+    return rest.trim()
 }
 
 // Overloads for Smack's builder API, so outgoing stanzas can be assembled fluently.
