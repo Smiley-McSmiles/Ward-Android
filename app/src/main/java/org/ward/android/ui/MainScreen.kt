@@ -53,6 +53,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     var showArchived by remember { mutableStateOf(false) }
     var accountMenu by remember { mutableStateOf(false) }
     var overflowMenu by remember { mutableStateOf(false) }
+    var addSheet by remember { mutableStateOf(false) }
     var settingsPage by remember { mutableStateOf<String?>(null) }
     var addAccountScreen by remember { mutableStateOf(false) }
     var accountFilter by remember { mutableStateOf<Long?>(null) }
@@ -130,8 +131,6 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                             DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
                                 DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) },
                                     onClick = { overflowMenu = false; settingsPage = null; screen = "settings" })
-                                DropdownMenuItem(text = { Text("Add contact") }, leadingIcon = { Icon(Icons.Filled.PersonAdd, null) },
-                                    onClick = { overflowMenu = false; dialog = "contact" })
                                 DropdownMenuItem(text = { Text("New group") }, leadingIcon = { Icon(Icons.Filled.GroupAdd, null) },
                                     onClick = { overflowMenu = false; dialog = "group" })
                                 DropdownMenuItem(text = { Text("Join group") }, leadingIcon = { Icon(Icons.Filled.Login, null) },
@@ -154,9 +153,9 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                             Icon(Icons.Filled.Dns, "Server administration")
                         }
                     }
-                    FloatingActionButton(onClick = { dialog = "new" }, shape = CircleShape,
+                    FloatingActionButton(onClick = { addSheet = true }, shape = CircleShape,
                         modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(18.dp)) {
-                        Icon(Icons.Filled.Add, "New chat")
+                        Icon(Icons.Filled.Add, "New message or contact")
                     }
                 }
             }
@@ -183,6 +182,34 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
         "contact" -> AddContactDialog(vm, accountFilter, onDismiss = { dialog = null })
         "group" -> NewGroupDialog(vm, accountFilter, onDismiss = { dialog = null })
         "join" -> JoinGroupDialog(vm, accountFilter, onDismiss = { dialog = null })
+    }
+    if (addSheet) {
+        ModalBottomSheet(onDismissRequest = { addSheet = false }, dragHandle = { BottomSheetDefaults.DragHandle() }) {
+            Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
+                Text("Start something", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(4.dp))
+                Text("Choose what you want to create.", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(14.dp))
+                ListItem(
+                    headlineContent = { Text("New message") },
+                    supportingContent = { Text("Start a chat with an XMPP address") },
+                    leadingContent = { Icon(Icons.Outlined.ChatBubbleOutline, null) },
+                    modifier = Modifier.clickable {
+                        addSheet = false
+                        dialog = "new"
+                    })
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                ListItem(
+                    headlineContent = { Text("Add contact") },
+                    supportingContent = { Text("Send someone a contact request") },
+                    leadingContent = { Icon(Icons.Outlined.PersonAdd, null) },
+                    modifier = Modifier.clickable {
+                        addSheet = false
+                        dialog = "contact"
+                    })
+            }
+        }
     }
 }
 
