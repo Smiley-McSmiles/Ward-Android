@@ -85,6 +85,7 @@ class Omemo2(
         const val SCE = "urn:xmpp:sce:1"
         const val VERSION = 4
         private const val MIN_PRE_KEYS = 25
+        private const val USED_PRE_KEYS_MAX = 100
         private const val DEVICE_CACHE_MS = 5 * 60_000L
         /**
          * Write an OMEMO 2 state file from keys parsed out of a Ward GTK device backup.
@@ -197,6 +198,7 @@ class Omemo2(
         var registrationId: Int = 0,
         var signedPreKeys: MutableMap<String, String> = mutableMapOf(),
         var preKeys: MutableMap<String, String> = mutableMapOf(),
+        var usedPreKeys: MutableMap<String, String> = mutableMapOf(),
         var nextPreKeyId: Int = 1,
         var sessions: MutableMap<String, String> = mutableMapOf(),
         var identities: MutableMap<String, String> = mutableMapOf(),
@@ -223,6 +225,7 @@ class Omemo2(
 
     private val signedPreKeys = LinkedHashMap<Int, SignedPreKeyRecord>()
     private val preKeys = LinkedHashMap<Int, PreKeyRecord>()
+    private val usedPreKeys = LinkedHashMap<Int, PreKeyRecord>()
     private val sessions = HashMap<String, SessionRecord>()
     private val identities = HashMap<String, IdentityKey>()
     private val trusted = HashMap<String, Boolean>()
@@ -313,6 +316,9 @@ class Omemo2(
             for ((k, v) in disk.preKeys) runCatching {
                 preKeys[k.toInt()] = PreKeyRecord(Base64.getDecoder().decode(v))
             }
+            for ((k, v) in disk.usedPreKeys) runCatching {
+                usedPreKeys[k.toInt()] = PreKeyRecord(Base64.getDecoder().decode(v))
+            }
             for ((k, v) in disk.sessions) runCatching {
                 sessions[k] = SessionRecord(Base64.getDecoder().decode(v))
             }
@@ -352,6 +358,7 @@ class Omemo2(
     private fun save() {
         disk.signedPreKeys = signedPreKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
         disk.preKeys = preKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
+        disk.usedPreKeys = usedPreKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
         disk.sessions = sessions.entries.associate { it.key to b64(it.value.serialize()) }.toMutableMap()
         disk.identities = identities.entries.associate { it.key to b64(it.value.serialize()) }.toMutableMap()
         disk.trusted = trusted
@@ -456,14 +463,31 @@ class Omemo2(
     }
 
     override fun loadPreKey(preKeyId: Int): PreKeyRecord = synchronized(lock) {
-        preKeys[preKeyId] ?: throw InvalidKeyIdException("No pre key $preKeyId")
+        // A sender may keep using a cached bundle after we have consumed a one-time pre-key.
+        // Retain consumed keys for a bounded period so delayed or repeated key exchanges still
+        // decrypt instead of reporting "No pre key <id>".
+        preKeys[preKeyId] ?: usedPreKeys[preKeyId]
+            ?: throw InvalidKeyIdException("No pre key $preKeyId")
     }
     override fun storePreKey(preKeyId: Int, record: PreKeyRecord) {
         synchronized(lock) { preKeys[preKeyId] = record; disk.preKeys[preKeyId.toString()] = b64(record.serialize()); save() }
     }
-    override fun containsPreKey(preKeyId: Int): Boolean = synchronized(lock) { preKeys.containsKey(preKeyId) }
+    override fun containsPreKey(preKeyId: Int): Boolean = synchronized(lock) {
+        preKeys.containsKey(preKeyId) || usedPreKeys.containsKey(preKeyId)
+    }
     override fun removePreKey(preKeyId: Int) {
-        synchronized(lock) { preKeys.remove(preKeyId); disk.preKeys.remove(preKeyId.toString()); save() }
+        synchronized(lock) {
+            val used = preKeys.remove(preKeyId)
+            if (used != null) {
+                usedPreKeys[preKeyId] = used
+                while (usedPreKeys.size > USED_PRE_KEYS_MAX) {
+                    val oldest = usedPreKeys.keys.firstOrNull() ?: break
+                    usedPreKeys.remove(oldest)
+                }
+            }
+            disk.preKeys.remove(preKeyId.toString())
+            save()
+        }
     }
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord = synchronized(lock) {
