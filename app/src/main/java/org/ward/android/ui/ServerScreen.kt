@@ -97,15 +97,21 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
+            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onBackground) }
             Column(Modifier.weight(1f)) {
                 Text(acc?.domain ?: "Server", style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground)
                 Text("Administration", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = { refresh++ }) { Icon(Icons.Filled.Refresh, "Refresh") }
-            IconButton(onClick = { disco = true }) { Icon(Icons.Filled.Dns, "Service discovery") }
-            IconButton(onClick = { xml = true }) { Icon(Icons.Filled.Code, "XML console") }
+            IconButton(onClick = { refresh++ }) {
+                Icon(Icons.Filled.Refresh, "Refresh", tint = MaterialTheme.colorScheme.onBackground)
+            }
+            IconButton(onClick = { disco = true }) {
+                Icon(Icons.Filled.Dns, "Service discovery", tint = MaterialTheme.colorScheme.onBackground)
+            }
+            IconButton(onClick = { xml = true }) {
+                Icon(Icons.Filled.Code, "XML console", tint = MaterialTheme.colorScheme.onBackground)
+            }
         }
         if (states[accountId]?.state != "online") {
             ListItem(headlineContent = { Text("Connect to see server administration") },
