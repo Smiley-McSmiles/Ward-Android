@@ -14,7 +14,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -293,6 +295,39 @@ fun ContactsTab(vm: AppViewModel, contacts: List<ContactEntity>, pad: PaddingVal
     }
 }
 
+private val commonXmppServers = listOf(
+    "jabber.org",
+    "xmpp.jp",
+    "conversation.im",
+    "disroot.org",
+    "chinwag.im",
+    "jabber.de",
+)
+
+@Composable
+private fun JidSuggestions(value: String, accountId: Long, accounts: List<AccountEntity>, onPick: (String) -> Unit) {
+    val at = value.indexOf('@')
+    val local = (if (at >= 0) value.substring(0, at) else value).trim()
+    if (local.isBlank() || local.any { it.isWhitespace() }) return
+    val domainPart = if (at >= 0) value.substring(at + 1).trim() else ""
+    val domains = linkedSetOf<String>()
+    accounts.firstOrNull { it.id == accountId }?.domain?.takeIf { it.isNotBlank() }?.let { domains.add(it) }
+    accounts.map { it.domain }.filter { it.isNotBlank() }.forEach { domains.add(it) }
+    domains.addAll(commonXmppServers)
+    val suggestions = domains
+        .filter { domainPart.isBlank() || it.startsWith(domainPart, ignoreCase = true) }
+        .map { "$local@$it" }
+        .filter { !it.equals(value.trim(), ignoreCase = true) }
+        .take(6)
+    if (suggestions.isEmpty()) return
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        suggestions.forEach { suggestion ->
+            SuggestionChip(onClick = { onPick(suggestion) }, label = { Text(suggestion) })
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: () -> Unit) {
@@ -314,6 +349,7 @@ fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: (
             }
             OutlinedTextField(jid, { jid = it }, label = { Text("Address, like alex@example.org") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth())
+            JidSuggestions(jid, accountId, accounts) { jid = it }
             Spacer(Modifier.height(10.dp))
             Text("Contacts", style = MaterialTheme.typography.labelMedium)
             LazyColumn(Modifier.heightIn(max = 240.dp)) {
@@ -346,6 +382,7 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
                 accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id }, label = { Text(a.displayName) }) }
             }
             OutlinedTextField(jid, { jid = it }, label = { Text("Address") }, singleLine = true)
+            JidSuggestions(jid, accountId, accounts) { jid = it }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(name, { name = it }, label = { Text("Name (optional)") }, singleLine = true)
             Text("They get a request to share their status with you", style = MaterialTheme.typography.bodySmall,
