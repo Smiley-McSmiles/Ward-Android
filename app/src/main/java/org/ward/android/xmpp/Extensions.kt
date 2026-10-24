@@ -38,6 +38,7 @@ object Ns {
     const val SID = "urn:xmpp:sid:0"
     const val DELAY = "urn:xmpp:delay"
     const val MAM = "urn:xmpp:mam:2"
+    const val CARBONS = "urn:xmpp:carbons:2"
     const val COMMANDS = "http://jabber.org/protocol/commands"
     const val ADMIN = "http://jabber.org/protocol/admin#"
     const val DISCO_ITEMS = "http://jabber.org/protocol/disco#items"

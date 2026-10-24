@@ -240,6 +240,20 @@ class CallManager(private val session: XmppSession) {
         }
     }
 
+    /**
+     * A carbon copy of a JMI message. When another of our devices answers or declines the call
+     * ringing here, stop ringing, as Ward GTK does. Nothing else in a copy is for this device;
+     * our own outgoing propose in particular must not ring here.
+     */
+    fun onJmiCarbon(sent: Boolean, msg: Message, xml: String) {
+        session.core.addXmlLog(session.account.id, true, xml)
+        if (!sent) return
+        val state = session.core.call.value ?: return
+        if (!state.incoming || state.phase != "INCOMING") return
+        val action = msg.extensions.firstOrNull { it.namespace == JingleSdp.NS_JMI }?.elementName ?: return
+        if (action in listOf("proceed", "accept", "reject") && jmiId(msg, xml) == sid) finish()
+    }
+
     private fun sendJmi(action: String, extra: Map<String, Any>, to: String? = null, id: String = sid) {
         val destination = to ?: peerFullJid.ifBlank { peerJid }
         if (destination.isBlank() || id.isBlank()) return

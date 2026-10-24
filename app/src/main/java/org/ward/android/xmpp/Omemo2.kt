@@ -1120,7 +1120,12 @@ class Omemo2(
     private fun decryptDom(msg: Message, raw: String): Content? {
         if (!raw.contains("urn:xmpp:omemo:2")) return null
         val doc = runCatching { parse(raw) }.getOrNull() ?: return null
-        val enc = doc.getElementsByTagNameNS(NS, "encrypted").item(0) as? Element ?: return null
+        // Only an <encrypted> directly inside this <message>. A carbon copy or an archive result
+        // carries another message with its own from/to; decrypting that one against the wrapper's
+        // addresses used up its keys (and a one-time pre-key) and then failed the SCE check.
+        val top = doc.documentElement.childNodes
+        val enc = (0 until top.length).map { top.item(it) }
+            .firstOrNull { it is Element && it.namespaceURI == NS && it.localName == "encrypted" } as? Element ?: return null
         val keys = enc.getElementsByTagNameNS(NS, "keys")
         for (i in 0 until keys.length) {
             val k = keys.item(i) as? Element ?: continue
@@ -1146,7 +1151,10 @@ class Omemo2(
                         val (body, children) = parseEnvelope(String(decryptPayload(Base64.getDecoder().decode(payload), km), Charsets.UTF_8), senderBare, toJid)
                         Content(body, sid, trust, children, false)
                     }
-                } catch (e: Exception) { null }
+                } catch (e: Exception) {
+                    core.addXmlLog(account.id, true, "OMEMO 2 decrypt failed from $senderBare/$sid: ${e.stackTraceToString()}")
+                    null
+                }
             }
         }
         return null

@@ -393,11 +393,19 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         })
     }
 
+    private fun Message.isForwardingWrapper() =
+        getExtensionElement("sent", Ns.CARBONS) != null || getExtensionElement("received", Ns.CARBONS) != null ||
+            getExtensionElement("result", Ns.MAM) != null
+
     private fun setupMessageListeners(conn: XMPPConnection) {
         conn.addAsyncStanzaListener({ stanza ->
             if (stanza is Message) {
                 core.addXmlLog(account.id, true, stanza.toXML(XmlEnvironment.EMPTY).toString())
                 if (stanza.type != Message.Type.groupchat) {
+                    // A carbon copy (XEP-0280) or an archive result (XEP-0313) wraps the real
+                    // message. The carbon listener below and syncMam handle the inner message;
+                    // decrypting the wrapper here used up its OMEMO keys before they got to it.
+                    if (stanza.isForwardingWrapper()) return@addAsyncStanzaListener
                     val raw = stanza.toXML(XmlEnvironment.EMPTY).toString()
                     if (raw.contains("urn:xmpp:jingle-message:0")) {
                         call.onJmi(stanza, raw)
@@ -423,12 +431,19 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }, null)
         runCatching {
             CarbonManager.getInstanceFor(conn).addCarbonCopyReceivedListener(object : CarbonCopyReceivedListener {
-                override fun onCarbonCopyReceived(direction: CarbonExtension.Direction, carbonMessage: Message, wrapped: Message) {
-                    if (carbonMessage.type == Message.Type.groupchat) return
+                // Smack passes the copied message first and the <message> that carried it second.
+                override fun onCarbonCopyReceived(direction: CarbonExtension.Direction, carbonCopy: Message, wrappingMessage: Message) {
+                    if (carbonCopy.type == Message.Type.groupchat) return
                     val dir = if (direction == CarbonExtension.Direction.sent) 1 else 0
-                    val raw = wrapped.toXML(XmlEnvironment.EMPTY).toString()
-                    if (raw.contains("urn:xmpp:omemo:2")) scope.launch { processOmemo2(wrapped, dir, raw) }
-                    else processMessage(wrapped, directionOverride = dir)
+                    val raw = carbonCopy.toXML(XmlEnvironment.EMPTY).toString()
+                    when {
+                        raw.contains("urn:xmpp:jingle-message:0") -> call.onJmiCarbon(dir == 1, carbonCopy, raw)
+                        raw.contains("urn:xmpp:omemo:2") -> scope.launch { processOmemo2(carbonCopy, dir, raw) }
+                        // legacy OMEMO copies arrive through OmemoMessageListener.onOmemoCarbonCopyReceived
+                        carbonCopy.getExtensionElement("encrypted", Ns.OMEMO) != null -> Unit
+                        carbonCopy.ext("openpgp", Ns.OPENPGP) != null -> if (dir == 0) scope.launch { processPgp(carbonCopy) }
+                        else -> processMessage(carbonCopy, directionOverride = dir)
+                    }
                 }
             })
         }
@@ -509,9 +524,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                         processMessage(stanza, directionOverride = null, decryptedBody = decrypted.body, senderDevice = decrypted.senderDevice.deviceId.toLong(), trust = trust, encrypted = "omemo")
                     }
                 }
-                override fun onOmemoCarbonCopyReceived(direction: CarbonExtension.Direction, carbonMessage: Message, wrapped: Message, decrypted: OmemoMessage.Received) {
+                override fun onOmemoCarbonCopyReceived(direction: CarbonExtension.Direction, carbonCopy: Message, wrappingMessage: Message, decrypted: OmemoMessage.Received) {
                     val dir = if (direction == CarbonExtension.Direction.sent) 1 else 0
-                    processMessage(wrapped, directionOverride = dir, decryptedBody = decrypted.body,
+                    processMessage(carbonCopy, directionOverride = dir, decryptedBody = decrypted.body,
                         senderDevice = decrypted.senderDevice.deviceId.toLong(), encrypted = "omemo")
                 }
             })
@@ -795,12 +810,12 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     private suspend fun processOmemo2(msg: Message, direction: Int?, raw: String) {
         val mgr = omemo2
-        if (mgr == null) { saveUnreadableOmemo2(msg); return }
+        if (mgr == null) { saveUnreadableOmemo2(msg, direction); return }
         val content = mgr.decrypt(msg, raw)
         if (content == null) {
             // Only complain when the stanza actually contained a key for this device.
             val forUs = Regex("rid=['\"]${mgr.deviceId}['\"]").containsMatchIn(raw)
-            if (forUs) saveUnreadableOmemo2(msg)
+            if (forUs) saveUnreadableOmemo2(msg, direction)
             return
         }
         if (content.empty) return
@@ -809,10 +824,12 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             senderDevice = content.deviceId.toLong(), trust = content.trust, encrypted = "omemo2")
     }
 
-    private suspend fun saveUnreadableOmemo2(msg: Message) {
+    private suspend fun saveUnreadableOmemo2(msg: Message, direction: Int? = null) {
         val from = msg.from?.asEntityBareJidIfPossible()?.toString() ?: return
-        if (from == account.jid) return
-        val chat = core.ensureChat(account.id, from, "chat")
+        // What our other device sent belongs in the chat with its recipient.
+        val peer = if (direction == 1 || from == account.jid) msg.to?.asEntityBareJidIfPossible()?.toString() ?: return else from
+        if (peer == account.jid) return
+        val chat = core.ensureChat(account.id, peer, "chat")
         val id = msg.stanzaId ?: JidUtil.randomId()
         val e = MessageEntity(chatId = chat.id, stanzaId = id, originId = msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: "",
             sender = from, senderJid = from, senderName = (core.dao.contact(account.id, from)?.name ?: JidUtil.nick(from)),
@@ -1525,10 +1542,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             processMam(msgs, decrypted)
             var guard = 0
             while (!query.isComplete && guard++ < 20) {
-                val next = query.pageNext(100)
-                if (next.isEmpty()) break
-                // pageNext returns plain messages; forwarded info is no longer available, parse minimal
-                for (m in next) processMessage(m, directionOverride = null)
+                if (query.pageNext(100).isEmpty()) break
+                // pageNext replaces query.page: decrypt each page and keep its <delay>, as for the first.
+                var more: List<MessageOrOmemoMessage>? = null
+                if (omemoReady) runCatching { more = omemo?.decryptMamQueryResult(query) }
+                processMam(query.page.forwarded, more)
             }
         } catch (e: Exception) {
             core.addXmlLog(account.id, false, "MAM sync failed: ${e.message}")
