@@ -31,6 +31,8 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     var file by remember(url) { mutableStateOf<File?>(null) }
     var failed by remember(url) { mutableStateOf(false) }
     var loading by remember(url) { mutableStateOf(true) }
+    val progressMap by vm.core.downloadProgress.collectAsState()
+    val progress = progressMap[url]
     LaunchedEffect(url) {
         file = vm.core.localFile(url, name, mime)
         failed = file == null
@@ -40,10 +42,17 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
         mime.startsWith("image/") -> Box(Modifier.widthIn(max = 290.dp).heightIn(max = 320.dp), contentAlignment = Alignment.Center) {
             if (file != null) AsyncImage(model = file, contentDescription = name,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Fit)
-            else if (loading) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
+            else if (loading) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.height(6.dp))
+                if (progress != null) LinearProgressIndicator(progress = { progress }, modifier = Modifier.width(170.dp))
+                else LinearProgressIndicator(Modifier.width(170.dp))
+                Text("Downloading… ${if (progress != null) "${(progress * 100).toInt()}%" else ""}",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             else Text(if (failed) "Could not load image" else name, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
-        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, vm, url)
+        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, vm, url)
         else -> {
             val context = LocalContext.current
             Row(Modifier.clickable {
@@ -57,9 +66,17 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text(name, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
-                    Text(if (loading) "Downloading…" else if (failed) "Download failed" else formatBytes(size) +
-                        if (encrypted) " · encrypted" else "", fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (loading) {
+                        if (progress != null) LinearProgressIndicator(progress = { progress },
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                        else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+                        Text("Downloading… ${if (progress != null) "${(progress * 100).toInt()}%" else ""}",
+                            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Text(if (failed) "Download failed" else formatBytes(size) +
+                            if (encrypted) " · encrypted" else "", fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -67,7 +84,8 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
 }
 
 @Composable
-private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed: Boolean, vm: AppViewModel, url: String) {
+private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
+                            progress: Float?, vm: AppViewModel, url: String) {
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember { mutableStateOf(false) }
     var duration by remember { mutableStateOf(0) }
@@ -92,8 +110,16 @@ private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed:
         Spacer(Modifier.width(8.dp))
         Column {
             Text(if (loading) "Voice message…" else name, fontSize = 13.sp)
-            Text(if (failed) "Download failed" else if (duration > 0) "${duration / 1000}s · encrypted audio" else "Voice message",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (loading) {
+                if (progress != null) LinearProgressIndicator(progress = { progress },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+                Text("Downloading… ${if (progress != null) "${(progress * 100).toInt()}%" else ""}",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(if (failed) "Download failed" else if (duration > 0) "${duration / 1000}s · encrypted audio" else "Voice message",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

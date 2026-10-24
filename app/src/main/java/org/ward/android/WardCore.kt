@@ -334,20 +334,45 @@ class WardCore private constructor(val context: Context) {
         val out = File(cache, org.ward.android.util.FileCrypto.cacheName(url, name))
         if (out.exists() && out.length() > 0) return out
         val link = org.ward.android.util.FileCrypto.parse(url)
+        downloadProgress.value = downloadProgress.value + (url to 0f)
         return try {
             withContext(Dispatchers.IO) {
                 val source = if (link != null) link.httpsUrl else url
                 val raw = File(cache, out.name + ".download")
-                URL(source).openStream().use { input -> raw.outputStream().use { input.copyTo(it) } }
+                val connection = URL(source).openConnection()
+                val total = connection.contentLengthLong
+                var copied = 0L
+                var lastUpdate = 0L
+                connection.getInputStream().use { input ->
+                    raw.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            copied += read
+                            if (total > 0 && (copied == total || System.currentTimeMillis() - lastUpdate > 100)) {
+                                downloadProgress.value = downloadProgress.value +
+                                    (url to (copied.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                                lastUpdate = System.currentTimeMillis()
+                            }
+                        }
+                    }
+                }
+                (connection as? java.net.HttpURLConnection)?.disconnect()
                 if (link != null) {
                     org.ward.android.util.FileCrypto.decrypt(raw, out, link.key, link.iv)
                     raw.delete()
                 } else {
                     raw.renameTo(out)
                 }
+                downloadProgress.value = downloadProgress.value + (url to 1f)
                 out
             }
-        } catch (_: Exception) { null }
+        } catch (_: Exception) { null
+        } finally {
+            downloadProgress.value = downloadProgress.value - url
+        }
     }
 
     private fun queryName(uri: Uri): String? = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
@@ -397,6 +422,7 @@ class WardCore private constructor(val context: Context) {
 
     private val _xml = MutableStateFlow<List<XmlLogEntry>>(emptyList())
     val xml: StateFlow<List<XmlLogEntry>> = _xml
+    val downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
 
     fun sendRawXml(accountId: Long, xml: String): Boolean = sessions[accountId]?.sendRaw(xml) ?: false
 
