@@ -4,6 +4,8 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ward.android.ConnectionState
 import org.ward.android.data.AccountEntity
+import org.ward.android.util.AppLockStore
 import org.ward.android.xmpp.AdminCommand
 import org.ward.android.xmpp.AdminField
 import org.ward.android.xmpp.AdminStep
@@ -330,9 +333,27 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
     var error by remember { mutableStateOf("") }
     var paused by remember { mutableStateOf(false) }
     var frozen by remember { mutableStateOf<List<org.ward.android.XmlLogEntry>>(emptyList()) }
+    var pendingSave by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val filteredLog = (if (paused) frozen else log).filter { it.accountId == accountId }
+    val saveLog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        AppLockStore.endExternalActivity()
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = pendingSave
+        pendingSave = ""
+        scope.launch {
+            val ok = runCatching {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+                        ?: error("Could not open the selected file")
+                }
+            }.isSuccess
+            android.widget.Toast.makeText(context, if (ok) "XML console saved" else "Could not save XML console",
+                android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     LaunchedEffect(filteredLog.size, accountId, paused) {
         if (!paused && filteredLog.isNotEmpty()) {
             runCatching { listState.scrollToItem(filteredLog.lastIndex) }
@@ -345,9 +366,14 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
                 frozen = if (paused) log else emptyList()
             }) { Icon(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "Resume" else "Pause") }
             IconButton(onClick = {
-                context.copyText(filteredLog.joinToString("\n\n") { (if (it.incoming) "← " else "→ ") + it.text })
-                android.widget.Toast.makeText(context, "Console copied", android.widget.Toast.LENGTH_SHORT).show()
-            }) { Icon(Icons.Filled.ContentCopy, "Copy console") }
+                if (filteredLog.isEmpty()) {
+                    android.widget.Toast.makeText(context, "Nothing to save", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    pendingSave = filteredLog.joinToString("\n\n") { (if (it.incoming) "← " else "→ ") + it.text }
+                    AppLockStore.beginExternalActivity()
+                    saveLog.launch("ward-xml-${System.currentTimeMillis()}.txt")
+                }
+            }) { Icon(Icons.Filled.Save, "Save as") }
             IconButton(onClick = {
                 vm.core.clearXml()
                 frozen = emptyList()
