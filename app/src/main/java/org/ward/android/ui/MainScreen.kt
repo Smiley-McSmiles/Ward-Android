@@ -317,7 +317,7 @@ fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: (
             Spacer(Modifier.height(10.dp))
             Text("Contacts", style = MaterialTheme.typography.labelMedium)
             LazyColumn(Modifier.heightIn(max = 240.dp)) {
-                items(contacts.filter { it.inRoster }.take(20)) { c ->
+                items(contacts.filter { it.inRoster && (accountId == 0L || it.accountId == accountId) }.take(20)) { c ->
                     ListItem(headlineContent = { Text(c.name) }, supportingContent = { Text(c.jid) },
                         leadingContent = { Avatar(c.name, 34, show = c.presence) },
                         modifier = Modifier.clickable { jid = c.jid })

@@ -1,5 +1,7 @@
 package org.ward.android.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -25,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ward.android.R
+import org.ward.android.util.AppLockStore
 import org.ward.android.util.JidUtil
 import org.ward.android.xmpp.Registration
 
@@ -61,7 +64,13 @@ private fun StartPage(onSignIn: () -> Unit, onCreate: () -> Unit, onInvite: () -
         Spacer(Modifier.height(30.dp))
         Button(onClick = onSignIn, Modifier.widthIn(max = 340.dp).fillMaxWidth().height(50.dp),
             shape = CircleShape) { Text("Sign in", style = MaterialTheme.typography.titleMedium) }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = onSignIn) {
+            Icon(Icons.Filled.Upload, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Import keys with sign-in", style = MaterialTheme.typography.titleSmall)
+        }
+        Spacer(Modifier.height(4.dp))
         FilledTonalButton(onClick = onCreate, Modifier.widthIn(max = 340.dp).fillMaxWidth().height(50.dp),
             shape = CircleShape) { Text("Create an account", style = MaterialTheme.typography.titleMedium) }
         Spacer(Modifier.height(10.dp))
@@ -81,8 +90,34 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
     var tls by remember { mutableStateOf("auto") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var backupBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var backupName by remember { mutableStateOf("") }
+    var backupPassphrase by remember { mutableStateOf("") }
+    var backupError by remember { mutableStateOf("") }
+    var readingBackup by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val accounts by vm.accounts.collectAsState()
     val states by vm.states.collectAsState()
+    val pickBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        AppLockStore.endExternalActivity()
+        if (uri == null) return@rememberLauncherForActivityResult
+        readingBackup = true
+        backupError = ""
+        scope.launch {
+            val blob = runCatching {
+                withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+            }.getOrNull()
+            readingBackup = false
+            if (blob == null) {
+                backupError = "Could not read the selected backup file"
+            } else {
+                backupBytes = blob
+                backupName = uri.lastPathSegment ?: "device backup"
+                backupPassphrase = ""
+            }
+        }
+    }
     val latest = accounts.lastOrNull()
     val state = latest?.let { states[it.id] }
     LaunchedEffect(state?.state) {
@@ -113,6 +148,37 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
                     Checkbox(remember, { remember = it })
                     Text("Remember password")
                 }
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                Text("Existing encryption keys", style = MaterialTheme.typography.titleSmall)
+                Text("New sign-ins create a new OMEMO device by default. Import a Ward device backup to keep your existing identity and pre-keys instead.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(onClick = {
+                    AppLockStore.beginExternalActivity()
+                    pickBackup.launch(arrayOf("application/octet-stream", "*/*"))
+                }, enabled = !busy && !readingBackup, modifier = Modifier.fillMaxWidth()) {
+                    if (readingBackup) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Filled.Upload, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (backupBytes == null) "Import device backup" else "Choose another backup")
+                }
+                if (backupBytes != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(backupName, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(backupPassphrase, { backupPassphrase = it },
+                        label = { Text("Backup passphrase") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(), enabled = !busy)
+                    TextButton(onClick = { backupBytes = null; backupName = ""; backupPassphrase = "" },
+                        enabled = !busy) { Text("Remove backup") }
+                }
+                if (backupError.isNotBlank()) {
+                    Text(backupError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(8.dp))
                 TextButton(onClick = { advanced = !advanced }) {
                     Icon(if (advanced) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)
                     Text("Connection settings")
@@ -152,6 +218,7 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
                     when {
                         !JidUtil.valid(b) -> error = "Enter your full address, like alex@example.org"
                         password.isBlank() -> error = "Enter your password"
+                        backupBytes != null && backupPassphrase.isBlank() -> error = "Enter the passphrase for the imported backup"
                         else -> {
                             error = ""; busy = true
                             val opts = mutableMapOf<String, String>()
@@ -159,7 +226,10 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
                             if (port.isNotBlank() && port.toIntOrNull() != 0) opts["port"] = port
                             if (tls != "auto") opts["tls"] = tls
                             if (!remember) opts["store_password"] = "never"
-                            vm.addAccount(b, password, remember, opts)
+                            vm.addAccount(b, password, remember, opts, backupBytes, backupPassphrase) { message ->
+                                error = message
+                                busy = false
+                            }
                         }
                     }
                 }, Modifier.fillMaxWidth().height(50.dp), enabled = !busy, shape = CircleShape) {

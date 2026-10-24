@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.ward.android.WardCore
 import org.ward.android.data.*
+import org.ward.android.xmpp.OmemoBackup
 import org.ward.android.util.JidUtil
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -102,11 +103,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { core.markRead(chat) }
     }
 
-    fun addAccount(jid: String, password: String, remember: Boolean, options: Map<String, String> = emptyMap()) =
-        viewModelScope.launch {
-            val acc = core.addAccount(jid, password, remember, options)
-            core.connectAccount(acc, password)
+    fun addAccount(jid: String, password: String, remember: Boolean, options: Map<String, String> = emptyMap(),
+                   backup: ByteArray? = null, backupPassphrase: String = "",
+                   onError: (String) -> Unit = {}) = viewModelScope.launch {
+        try {
+            // Keep the account disabled while the backup is installed. Otherwise the
+            // foreground service can auto-connect it and generate a fresh OMEMO identity
+            // before the imported keys are in place.
+            val acc = core.addAccount(jid, password, remember, options, enabled = backup == null)
+            if (backup != null) {
+                try {
+                    withContext(Dispatchers.IO) {
+                        OmemoBackup.importDevice(core, acc, backup, backupPassphrase)
+                    }
+                } catch (e: Exception) {
+                    runCatching { core.deleteAccount(acc) }
+                    onError(e.message ?: "Could not import the device backup")
+                    return@launch
+                }
+                // Connect explicitly first, then enable the account so the service sees an
+                // existing session and does not race us with another connection.
+                core.connectAccount(acc, password)
+                core.updateAccount(acc.copy(enabled = true))
+            } else {
+                core.connectAccount(acc, password)
+            }
+        } catch (e: Exception) {
+            onError(e.message ?: "Could not add the account")
         }
+    }
 
     fun connect(acc: AccountEntity, password: String? = null) = viewModelScope.launch {
         core.connectAccount(acc, password ?: core.passwordOf(acc))
