@@ -88,7 +88,6 @@ class Omemo2(
         const val SCE = "urn:xmpp:sce:1"
         const val VERSION = 4
         private const val MIN_PRE_KEYS = 25
-        private const val USED_PRE_KEYS_MAX = 100
         private const val DEVICE_CACHE_MS = 30_000L
         /**
          * Write an OMEMO 2 state file from keys parsed out of a Ward GTK device backup.
@@ -195,13 +194,13 @@ class Omemo2(
         var edIdentity: String = "",
         var legacyIdentity: String = "",
         var staleDeviceId: Int = 0,
+        var bundleFix: Boolean = false,
         var cleanupVersion: Int = 0,
         var ignoredDevices: MutableList<Int> = mutableListOf(),
         var deviceId: Int = 0,
         var registrationId: Int = 0,
         var signedPreKeys: MutableMap<String, String> = mutableMapOf(),
         var preKeys: MutableMap<String, String> = mutableMapOf(),
-        var usedPreKeys: MutableMap<String, String> = mutableMapOf(),
         var nextPreKeyId: Int = 1,
         var sessions: MutableMap<String, String> = mutableMapOf(),
         var identities: MutableMap<String, String> = mutableMapOf(),
@@ -228,7 +227,6 @@ class Omemo2(
 
     private val signedPreKeys = LinkedHashMap<Int, SignedPreKeyRecord>()
     private val preKeys = LinkedHashMap<Int, PreKeyRecord>()
-    private val usedPreKeys = LinkedHashMap<Int, PreKeyRecord>()
     private val sessions = HashMap<String, SessionRecord>()
     private val identities = HashMap<String, IdentityKey>()
     private val trusted = HashMap<String, Boolean>()
@@ -321,9 +319,6 @@ class Omemo2(
             for ((k, v) in disk.preKeys) runCatching {
                 preKeys[k.toInt()] = PreKeyRecord(Base64.getDecoder().decode(v))
             }
-            for ((k, v) in disk.usedPreKeys) runCatching {
-                usedPreKeys[k.toInt()] = PreKeyRecord(Base64.getDecoder().decode(v))
-            }
             for ((k, v) in disk.sessions) runCatching {
                 sessions[k] = SessionRecord(Base64.getDecoder().decode(v))
             }
@@ -332,6 +327,29 @@ class Omemo2(
                 identities[k] = if (bytes.size == 32) IdentityKey(Curve.decodePointEd(bytes, 0)) else IdentityKey(bytes, 0)
             }
             trusted.putAll(disk.trusted)
+            // One-time repair for sessions built from the wrong device bundle. A session that
+            // still has an unacknowledged PreKey message was never confirmed by the peer; drop it
+            // and the identity pinned from that bundle so the next message establishes a correct
+            // session for this device.
+            if (!disk.bundleFix) {
+                val broken = sessions.filterValues { record ->
+                    runCatching { record.sessionState.hasUnacknowledgedPreKeyMessage() }.getOrDefault(false)
+                }.keys
+                for (k in broken) {
+                    sessions.remove(k)
+                    identities.remove(k)
+                    trusted.remove(k)
+                    disk.sessions.remove(k)
+                    disk.identities.remove(k)
+                    disk.trusted.remove(k)
+                }
+                disk.bundleFix = true
+                save()
+                if (broken.isNotEmpty()) {
+                    core.addXmlLog(account.id, false,
+                        "OMEMO 2 repaired ${broken.size} unacknowledged session(s) built from incorrect bundles")
+                }
+            }
             ensureKeys()
             save()
             ready = true
@@ -363,7 +381,6 @@ class Omemo2(
     private fun save() {
         disk.signedPreKeys = signedPreKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
         disk.preKeys = preKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
-        disk.usedPreKeys = usedPreKeys.entries.associate { it.key.toString() to b64(it.value.serialize()) }.toMutableMap()
         disk.sessions = sessions.entries.associate { it.key to b64(it.value.serialize()) }.toMutableMap()
         disk.identities = identities.entries.associate { it.key to b64(it.value.serialize()) }.toMutableMap()
         disk.trusted = trusted
@@ -468,31 +485,14 @@ class Omemo2(
     }
 
     override fun loadPreKey(preKeyId: Int): PreKeyRecord = synchronized(lock) {
-        // A sender may keep using a cached bundle after we have consumed a one-time pre-key.
-        // Retain consumed keys for a bounded period so delayed or repeated key exchanges still
-        // decrypt instead of reporting "No pre key <id>".
-        preKeys[preKeyId] ?: usedPreKeys[preKeyId]
-            ?: throw InvalidKeyIdException("No pre key $preKeyId")
+        preKeys[preKeyId] ?: throw InvalidKeyIdException("No pre key $preKeyId")
     }
     override fun storePreKey(preKeyId: Int, record: PreKeyRecord) {
         synchronized(lock) { preKeys[preKeyId] = record; disk.preKeys[preKeyId.toString()] = b64(record.serialize()); save() }
     }
-    override fun containsPreKey(preKeyId: Int): Boolean = synchronized(lock) {
-        preKeys.containsKey(preKeyId) || usedPreKeys.containsKey(preKeyId)
-    }
+    override fun containsPreKey(preKeyId: Int): Boolean = synchronized(lock) { preKeys.containsKey(preKeyId) }
     override fun removePreKey(preKeyId: Int) {
-        synchronized(lock) {
-            val used = preKeys.remove(preKeyId)
-            if (used != null) {
-                usedPreKeys[preKeyId] = used
-                while (usedPreKeys.size > USED_PRE_KEYS_MAX) {
-                    val oldest = usedPreKeys.keys.firstOrNull() ?: break
-                    usedPreKeys.remove(oldest)
-                }
-            }
-            disk.preKeys.remove(preKeyId.toString())
-            save()
-        }
+        synchronized(lock) { preKeys.remove(preKeyId); disk.preKeys.remove(preKeyId.toString()); save() }
     }
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord = synchronized(lock) {
@@ -756,9 +756,10 @@ class Omemo2(
         if (!force) deviceCache[bareJid]?.let { if (now - it.at < DEVICE_CACHE_MS) return it.devices }
         return try {
             val node = PubSubManager.getInstanceFor(conn, org.jxmpp.jid.impl.JidCreate.entityBareFrom(bareJid)).getLeafNode(DEVICES)
-            var items: List<org.jivesoftware.smackx.pubsub.Item> = node.getItems("current")
+            var items: List<org.jivesoftware.smackx.pubsub.Item> = node.getItems(listOf("current"))
             if (items.isEmpty()) items = node.getItems()
-            val xml = items.firstOrNull()?.toXML(XmlEnvironment.EMPTY)?.toString() ?: ""
+            val item = items.firstOrNull { it.id == "current" } ?: items.firstOrNull()
+            val xml = item?.toXML(XmlEnvironment.EMPTY)?.toString() ?: ""
             val doc = parse(xml)
             val listed = doc.getElementsByTagNameNS(NS, "device").let { nl ->
                 (0 until nl.length).mapNotNull { (nl.item(it) as? Element)?.getAttribute("id")?.toIntOrNull() }
@@ -788,8 +789,11 @@ class Omemo2(
         bundleCache[ck]?.let { if (now - it.at < DEVICE_CACHE_MS) return it.bundle }
         return try {
             val node = PubSubManager.getInstanceFor(conn, org.jxmpp.jid.impl.JidCreate.entityBareFrom(bareJid)).getLeafNode(BUNDLES)
-            val items: List<org.jivesoftware.smackx.pubsub.Item> = node.getItems(devId.toString())
-            val xml = items.firstOrNull()?.toXML(XmlEnvironment.EMPTY)?.toString() ?: return null
+            val items: List<org.jivesoftware.smackx.pubsub.Item> = node.getItems(listOf(devId.toString()))
+            // Some servers ignore the item-id filter. Never fall back to an arbitrary item: that
+            // would use another device's identity and pre-keys.
+            val item = items.firstOrNull { it.id == devId.toString() } ?: return null
+            val xml = item.toXML(XmlEnvironment.EMPTY).toString()
             val doc = parse(xml)
             val bundle = doc.getElementsByTagNameNS(NS, "bundle").item(0) as? Element ?: return null
             fun child(name: String): Element? =
@@ -961,6 +965,9 @@ class Omemo2(
         return try {
             if (!verifyBundleSignature(bundle)) throw InvalidKeyException("Invalid OMEMO 2 signed pre key signature")
             createSession(address, bundle)
+            // A one-time pre-key is now committed to a session. Never build another session
+            // from the same cached bundle and reuse it.
+            bundleCache.remove("$bareJid|$devId")
             true
         } catch (e: Exception) {
             core.addXmlLog(account.id, false, "OMEMO 2 session with $bareJid/$devId failed: ${e.message}")
@@ -1209,6 +1216,7 @@ class Omemo2(
     fun forgetDevice(bareJid: String, devId: Int) {
         synchronized(lock) {
             val prefix = "$bareJid|$devId"
+            bundleCache.remove(prefix)
             sessions.remove(prefix)
             identities.remove(prefix)
             trusted.remove(prefix)
@@ -1222,6 +1230,8 @@ class Omemo2(
     fun forget(bareJid: String) {
         synchronized(lock) {
             val prefix = "$bareJid|"
+            deviceCache.remove(bareJid)
+            bundleCache.keys.removeIf { it.startsWith(prefix) }
             sessions.keys.removeIf { it.startsWith(prefix) }
             identities.keys.removeIf { it.startsWith(prefix) }
             trusted.keys.removeIf { it.startsWith(prefix) }

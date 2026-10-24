@@ -166,7 +166,7 @@ class WardCore private constructor(val context: Context) {
         val defaultEnc = acc?.let { accountEncryptionDefault(it) } ?: "default"
         val encryption = when {
             defaultEnc != "default" -> defaultEnc
-            type == "chat" -> "omemo"
+            type == "chat" -> "default"
             else -> "default"
         }
         val id = dao.insertChat(ChatEntity(accountId = accountId, jid = bare, type = type, name = display,
