@@ -90,10 +90,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         private set
     @Volatile var omemo2: Omemo2? = null
     private var omemo2ListWatch: Job? = null
-        private set
     var admin: AdminService? = null
         private set
     private val gson = Gson()
+    private val legacyDeviceRefreshes = mutableSetOf<String>()
     private val rooms = ConcurrentHashMap<String, MultiUserChat>()
     private val _occupants = MutableStateFlow<Map<String, List<OccupantInfo>>>(emptyMap())
     val occupants: StateFlow<Map<String, List<OccupantInfo>>> = _occupants
@@ -414,6 +414,14 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     val envelope2 = raw.contains("urn:xmpp:omemo:2")
                     val pgp = stanza.ext("openpgp", Ns.OPENPGP) != null
                     val enc = stanza.getExtensionElement("encrypted", Ns.OMEMO) != null || envelope2 || pgp
+                    if (!envelope2 && !pgp && stanza.getExtensionElement("encrypted", Ns.OMEMO) != null) {
+                        val ownId = omemo?.ownDevice?.deviceId
+                        val hasKeyForUs = ownId != null && Regex("rid=['\"]$ownId['\"]").containsMatchIn(raw)
+                        if (!hasKeyForUs) {
+                            val sender = stanza.from?.asEntityBareJidIfPossible()?.toString()
+                            if (sender != null) scope.launch { refreshLegacyDeviceList(sender, force = true) }
+                        }
+                    }
                     if (pgp) {
                         scope.launch { processPgp(stanza) }
                     } else if (envelope2) {
@@ -514,7 +522,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 }
             })
             mgr.initialize()
+            synchronized(legacyDeviceRefreshes) { legacyDeviceRefreshes.clear() }
             openLegacyBundleNodes(conn, mgr)
+            openLegacyDeviceListNode(conn)
             omemo = mgr
             omemoReady = true
             mgr.addOmemoMessageListener(object : OmemoMessageListener {
@@ -569,6 +579,40 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 core.addXmlLog(account.id, false, "Could not open legacy OMEMO bundle $nodeName: ${it.message}")
             }
         }
+    }
+
+    /**
+     * Smack creates the legacy device-list node with Prosody's default access_model=presence.
+     * Contacts who are not presence subscribers then cannot read the list, so they keep encrypting
+     * for old devices. GTK publishes this node as open with a single persistent item.
+     */
+    private fun openLegacyDeviceListNode(conn: XMPPConnection) {
+        val nodeName = "eu.siacs.conversations.axolotl.devicelist"
+        runCatching {
+            val pm = PubSubManager.getInstanceFor(conn, conn.user.asBareJid())
+            val node = runCatching { pm.getLeafNode(nodeName) }.getOrElse { pm.getOrCreateLeafNode(nodeName) }
+            val form = node.getNodeConfiguration().fillableForm
+            form.setAccessModel(AccessModel.open)
+            form.setPersistentItems(true)
+            form.setMaxItems(1)
+            node.sendConfigurationForm(form)
+            core.addXmlLog(account.id, false, "Legacy OMEMO device list is open")
+        }.onFailure {
+            core.addXmlLog(account.id, false, "Could not open legacy OMEMO device list: ${it.message}")
+        }
+    }
+
+    private fun refreshLegacyDeviceList(jid: String, force: Boolean = false) {
+        val mgr = omemo ?: return
+        val bare = runCatching { JidCreate.entityBareFrom(jid) }.getOrNull() ?: return
+        synchronized(legacyDeviceRefreshes) {
+            if (!force && !legacyDeviceRefreshes.add(bare.toString())) return
+        }
+        runCatching { mgr.requestDeviceListUpdateFor(bare) }
+            .onFailure {
+                synchronized(legacyDeviceRefreshes) { legacyDeviceRefreshes.remove(bare.toString()) }
+                core.addXmlLog(account.id, false, "Legacy OMEMO device refresh for $bare failed: ${it.message}")
+            }
     }
 
     /**
@@ -1367,6 +1411,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 if (!mgr.multiUserChatSupportsOmemo(muc)) throw IllegalStateException("This group cannot be encrypted; change encryption in Details to Off")
                 EncryptedPayload.Omemo(mgr.encrypt(muc, entity.body))
             } else {
+                refreshLegacyDeviceList(chat.jid)
                 EncryptedPayload.Omemo(mgr.encrypt(JidCreate.entityBareFrom(chat.jid), entity.body))
             }
         } catch (e: Exception) {
