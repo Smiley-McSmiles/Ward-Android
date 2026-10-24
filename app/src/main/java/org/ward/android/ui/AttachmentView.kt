@@ -1,5 +1,6 @@
 package org.ward.android.ui
 
+import android.content.ClipData
 import android.content.Intent
 import android.media.MediaPlayer
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     var loading by remember(url) { mutableStateOf(true) }
     val progressMap by vm.core.downloadProgress.collectAsState()
     val progress = progressMap[url]
+    val context = LocalContext.current
     LaunchedEffect(url) {
         file = vm.core.localFile(url, name, mime)
         failed = file == null
@@ -40,8 +42,11 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     }
     when {
         mime.startsWith("image/") -> Box(Modifier.widthIn(max = 290.dp).heightIn(max = 320.dp), contentAlignment = Alignment.Center) {
-            if (file != null) AsyncImage(model = file, contentDescription = name,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Fit)
+            val image = file
+            if (image != null) AsyncImage(model = image, contentDescription = name,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+                    openWithDefaultApp(context, image, mime)
+                }, contentScale = ContentScale.Fit)
             else if (loading) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.height(6.dp))
@@ -52,15 +57,11 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
             }
             else Text(if (failed) "Could not load image" else name, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
-        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, vm, url)
+        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url)
         else -> {
-            val context = LocalContext.current
             Row(Modifier.clickable {
                 val f = file ?: return@clickable
-                val uri = FileProvider.getUriForFile(context, "org.ward.android.files", f)
-                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                runCatching { context.startActivity(intent) }
+                openWithDefaultApp(context, f, mime)
             }.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (mime.startsWith("video/")) Icons.Filled.Movie else Icons.Filled.InsertDriveFile, null, Modifier.size(30.dp))
                 Spacer(Modifier.width(8.dp))
@@ -83,9 +84,24 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     }
 }
 
+private fun openWithDefaultApp(context: android.content.Context, file: File, mime: String) {
+    runCatching {
+        val uri = FileProvider.getUriForFile(context, "org.ward.android.files", file)
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri,
+            mime.ifBlank { "application/octet-stream" }).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newRawUri("", uri)
+        }
+        context.startActivity(intent)
+    }.onFailure {
+        android.widget.Toast.makeText(context, "No app can open this file", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
 @Composable
 private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
-                            progress: Float?, vm: AppViewModel, url: String) {
+                            progress: Float?, mime: String, vm: AppViewModel, url: String) {
+    val context = LocalContext.current
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember { mutableStateOf(false) }
     var duration by remember { mutableStateOf(0) }
@@ -108,7 +124,7 @@ private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed:
             Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (playing) "Pause" else "Play")
         }
         Spacer(Modifier.width(8.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(if (loading) "Voice message…" else name, fontSize = 13.sp)
             if (loading) {
                 if (progress != null) LinearProgressIndicator(progress = { progress },
@@ -120,6 +136,9 @@ private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed:
                 Text(if (failed) "Download failed" else if (duration > 0) "${duration / 1000}s · encrypted audio" else "Voice message",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        IconButton(onClick = { file?.let { openWithDefaultApp(context, it, mime) } }, enabled = file != null) {
+            Icon(Icons.Filled.OpenInNew, "Open audio with another app")
         }
     }
 }
