@@ -76,6 +76,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { core.sendFile(chat, uri) }
     }
 
+    /** Upload several picked files in order, so their messages keep the picker's order. */
+    fun sendFiles(uris: List<Uri>) {
+        val chat = selectedChatEntity.value ?: return
+        viewModelScope.launch {
+            for (uri in uris) core.sendFile(chat, uri)
+        }
+    }
+
+    fun forward(target: ChatEntity, message: MessageEntity) {
+        viewModelScope.launch { core.forward(target, message) }
+    }
+
     fun setDraft(text: String) {
         val chat = selectedChatEntity.value ?: return
         viewModelScope.launch { core.setDraft(chat, text) }

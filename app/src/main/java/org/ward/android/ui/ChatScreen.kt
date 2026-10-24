@@ -71,6 +71,7 @@ fun ChatScreen(vm: AppViewModel) {
     val contacts by vm.contacts.collectAsState()
     val typing by vm.typing.collectAsState()
     val accounts by vm.accounts.collectAsState()
+    val allChats by vm.chats.collectAsState()
     val states by vm.states.collectAsState()
     val appSettings by vm.settings.state.collectAsState()
     val c = chat ?: return
@@ -86,15 +87,16 @@ fun ChatScreen(vm: AppViewModel) {
     var messageDetails by remember { mutableStateOf<MessageEntity?>(null) }
     var members by remember { mutableStateOf(false) }
     var selectedMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    var forwardMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var replyTo by remember { mutableStateOf<MessageEntity?>(null) }
     var editing by remember { mutableStateOf<MessageEntity?>(null) }
     var devices by remember { mutableStateOf(false) }
     var passwordOpen by remember { mutableStateOf(false) }
     var text by remember(c.id) { mutableStateOf(c.draft) }
     var initialized by remember(c.id) { mutableStateOf(false) }
-    val attach = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+    val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         AppLockStore.endExternalActivity()
-        if (uri != null) vm.sendFile(uri)
+        if (uris.isNotEmpty()) vm.sendFiles(uris)
     }
     var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var voiceFile by remember { mutableStateOf<java.io.File?>(null) }
@@ -246,7 +248,7 @@ fun ChatScreen(vm: AppViewModel) {
                     else vm.send(text, replyTo)
                     replyTo = null; text = ""
                 },
-                onAttach = { AppLockStore.beginExternalActivity(); attach.launch("*/*") },
+                onAttach = { AppLockStore.beginExternalActivity(); attach.launch(arrayOf("*/*")) },
                 recording = recorder != null,
                 sendWithEnter = (appSettings["chats.send_with"] ?: "enter") == "enter",
                 onVoice = {
@@ -327,7 +329,12 @@ fun ChatScreen(vm: AppViewModel) {
             onReply = { replyTo = it; editing = null; selectedMessage = null },
             onEdit = { editing = it; text = it.body; selectedMessage = null },
             onCopy = { context.copyText(it.body); selectedMessage = null },
+            onForward = { forwardMessage = it; selectedMessage = null },
             onDetails = { selectedMessage = null; messageDetails = it })
+    }
+    if (forwardMessage != null) {
+        ForwardMessageDialog(vm, forwardMessage!!, allChats, accounts,
+            onDismiss = { forwardMessage = null })
     }
     if (messageDetails != null) MessageDetailsDialog(c, messageDetails!!, onDismiss = { messageDetails = null })
     if (details) ChatDetailsSheet(vm, c, contact, onDismiss = { details = false }, onMembers = { details = false; members = true },
@@ -426,7 +433,8 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                         }
                         val attachmentNames = atts.mapNotNull { it["name"] as? String }
                         if (m.body.isNotBlank() && m.body !in attachmentNames) {
-                            MarkdownText(m.body, largeEmoji = vm.settings.bool("appearance.large_emoji"))
+                            MarkdownText(m.body, largeEmoji = vm.settings.bool("appearance.large_emoji"),
+                                onLongPress = onLongPress)
                         }
                         if (m.kind == "me") { /* already rendered with /me prefix */ }
                     }
@@ -584,13 +592,18 @@ private fun DetailRow(label: String, value: String, onCopy: (String) -> Unit) {
 @Composable
 fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, onDismiss: () -> Unit,
                         onReply: (MessageEntity) -> Unit, onEdit: (MessageEntity) -> Unit, onCopy: (MessageEntity) -> Unit,
-                        onDetails: (MessageEntity) -> Unit) {
+                        onForward: (MessageEntity) -> Unit, onDetails: (MessageEntity) -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
+    var emojiPicker by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 24.dp)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                 for (e in vm.settings.list("chats.quick_reactions").ifEmpty { listOf("👍", "❤️", "😂", "😮", "😢", "🎉") }) {
                     TextButton(onClick = { vm.react(msg, e); onDismiss() }) { Text(e, fontSize = 26.sp) }
+                }
+                IconButton(onClick = { emojiPicker = true }) {
+                    Icon(Icons.Filled.AddReaction, "More reactions")
                 }
             }
             HorizontalDivider()
@@ -598,7 +611,7 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
                 SheetAction(Icons.Filled.Reply, "Reply") { onReply(msg) }
                 if (msg.direction == 1 && msg.kind != "file") SheetAction(Icons.Filled.Edit, "Edit") { onEdit(msg) }
                 SheetAction(Icons.Filled.ContentCopy, "Copy text") { onCopy(msg) }
-                SheetAction(Icons.Filled.Forward, "Forward") { onDismiss() }
+                SheetAction(Icons.Filled.Forward, "Forward") { onForward(msg) }
                 if (msg.direction == 1) SheetAction(Icons.Filled.Delete, "Delete for everyone") { confirmDelete = true }
                 SheetAction(Icons.Filled.DeleteOutline, "Delete for me") {
                     vm.retract(msg, false); onDismiss()
@@ -607,10 +620,87 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
             }
         }
     }
+    if (emojiPicker) {
+        EmojiPickerDialog(onDismiss = { emojiPicker = false }) { emoji ->
+            emojiPicker = false
+            vm.react(msg, emoji)
+            onDismiss()
+        }
+    }
     if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete for everyone?") },
         text = { Text("This removes the message for everyone in this chat.") },
         confirmButton = { TextButton(onClick = { vm.retract(msg, true); confirmDelete = false; onDismiss() }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
+}
+
+@Composable
+private fun EmojiPickerDialog(onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    var custom by remember { mutableStateOf("") }
+    val emojis = remember {
+        listOf(
+            "👍", "❤️", "😂", "😮", "😢", "🎉", "😀", "😃", "😄", "😁", "😆", "😅",
+            "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙",
+            "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🥳", "😏",
+            "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺",
+            "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰",
+            "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥", "😶", "😐", "😑", "😬", "🙄",
+            "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴",
+            "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "👏", "🙌", "🤝", "🙏", "💪", "👀",
+            "🔥", "✨", "💯", "✅", "❌", "⭐", "💜", "💙", "💚", "💛", "🧡", "🤍"
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose a reaction") },
+        text = {
+            Column {
+                OutlinedTextField(custom, { custom = it }, label = { Text("Type or paste any emoji") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(42.dp),
+                    modifier = Modifier.height(260.dp)
+                ) {
+                    items(emojis.size) { i ->
+                        TextButton(onClick = { onPick(emojis[i]) }) { Text(emojis[i], fontSize = 24.sp) }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (custom.isNotBlank()) onPick(custom.trim()) }, enabled = custom.isNotBlank()) {
+                Text("React")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun ForwardMessageDialog(vm: AppViewModel, msg: MessageEntity, chats: List<ChatEntity>,
+                                 accounts: List<AccountEntity>, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Forward to") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                chats.filter { it.id != msg.chatId }.forEach { target ->
+                    val account = accounts.firstOrNull { it.id == target.accountId }
+                    ListItem(
+                        headlineContent = { Text(target.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = { Text(account?.jid ?: target.jid, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingContent = { Avatar(target.displayName, 32, show = null) },
+                        modifier = Modifier.clickable {
+                            vm.forward(target, msg)
+                            onDismiss()
+                        }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable

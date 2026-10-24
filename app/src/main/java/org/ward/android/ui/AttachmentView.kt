@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package org.ward.android.ui
 
 import android.content.ClipData
@@ -7,8 +9,12 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.view.Surface
 import android.view.TextureView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,16 +36,18 @@ import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ward.android.util.FileCrypto
 import org.ward.android.xmpp.guessMime
 import java.io.File
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     val url = a["url"]?.toString() ?: return
-    val name = a["name"]?.toString()?.takeIf { it.isNotBlank() }
-        ?: url.substringAfterLast('/').substringBefore('?').substringBefore('#').ifBlank { "attachment" }
+    val name = prettyName(a["name"]?.toString()?.takeIf { it.isNotBlank() }
+        ?: url.substringAfterLast('/').substringBefore('?').substringBefore('#').ifBlank { "attachment" })
     val declaredMime = a["mime"]?.toString().orEmpty()
     val guessedMime = guessMime(name).takeUnless { it == "application/octet-stream" } ?: guessMime(url)
     val mime = when {
@@ -66,13 +74,44 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
         failed = file == null
         loading = false
     }
+    val scope = rememberCoroutineScope()
+    val saveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(mime.ifBlank { "application/octet-stream" })
+    ) { uri ->
+        val f = file
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (f == null) {
+            android.widget.Toast.makeText(context, "Wait for the download to finish", android.widget.Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        f.inputStream().use { input -> input.copyTo(out) }
+                    } != null
+                }.getOrDefault(false)
+            }
+            android.widget.Toast.makeText(context, if (saved) "File saved" else "Could not save file",
+                android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun saveFile() {
+        if (file == null) {
+            android.widget.Toast.makeText(context, if (loading) "Wait for the download to finish" else "File is not downloaded",
+                android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        saveLauncher.launch(downloadName)
+    }
     when {
         mime.startsWith("image/") -> Box(Modifier.widthIn(max = 290.dp).heightIn(max = 320.dp), contentAlignment = Alignment.Center) {
             val image = file
             if (image != null) AsyncImage(model = image, contentDescription = name,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
-                    openWithDefaultApp(context, image, mime)
-                }, contentScale = ContentScale.Fit)
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).combinedClickable(
+                    onClick = { openWithDefaultApp(context, image, mime) },
+                    onLongClick = { saveFile() }
+                ), contentScale = ContentScale.Fit)
             else if (loading) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.height(6.dp))
@@ -83,13 +122,16 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
             }
             else Text(if (failed) "Could not load image" else name, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
-        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted)
-        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url)
+        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, ::saveFile)
+        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url, ::saveFile)
         else -> {
-            Row(Modifier.clickable {
-                val f = file ?: return@clickable
-                openWithDefaultApp(context, f, mime)
-            }.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.combinedClickable(
+                onClick = {
+                    val f = file ?: return@combinedClickable
+                    openWithDefaultApp(context, f, mime)
+                },
+                onLongClick = { saveFile() }
+            ).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (mime.startsWith("video/")) Icons.Filled.Movie else Icons.Filled.InsertDriveFile, null, Modifier.size(30.dp))
                 Spacer(Modifier.width(8.dp))
                 Column {
@@ -113,7 +155,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
 
 @Composable
 private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
-                            progress: Float?, size: Long, encrypted: Boolean) {
+                            progress: Float?, size: Long, encrypted: Boolean, onLongClick: () -> Unit) {
     if (file == null) {
         Box(Modifier.widthIn(max = 290.dp).fillMaxWidth().height(150.dp)
             .clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
@@ -141,7 +183,6 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
         aspect = withContext(Dispatchers.IO) { videoAspect(file) }
     }
     var fullscreen by remember { mutableStateOf(false) }
-    var rotation by remember { mutableIntStateOf(0) }
     var position by remember { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
 
@@ -150,18 +191,16 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
             properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 VideoSurface(file = file, startPosition = position, autoPlay = playing,
-                    rotation = rotation, aspect = aspect, fullscreen = true,
+                    aspect = aspect, fullscreen = true, onLongClick = onLongClick,
                     onState = { p, isPlaying -> position = p; playing = isPlaying },
-                    onToggleFullscreen = { fullscreen = false },
-                    onRotate = { rotation = (rotation + 90) % 360 })
+                    onToggleFullscreen = { fullscreen = false })
             }
         }
     } else {
         VideoSurface(file = file, startPosition = position, autoPlay = playing,
-            rotation = rotation, aspect = aspect, fullscreen = false,
+            aspect = aspect, fullscreen = false, onLongClick = onLongClick,
             onState = { p, isPlaying -> position = p; playing = isPlaying },
-            onToggleFullscreen = { fullscreen = true },
-            onRotate = { rotation = (rotation + 90) % 360 })
+            onToggleFullscreen = { fullscreen = true })
     }
 
     Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -175,10 +214,9 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
 }
 
 @Composable
-private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean, rotation: Int,
-                         aspect: Float, fullscreen: Boolean,
-                         onState: (Int, Boolean) -> Unit, onToggleFullscreen: () -> Unit,
-                         onRotate: () -> Unit) {
+private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
+                         aspect: Float, fullscreen: Boolean, onLongClick: () -> Unit,
+                         onState: (Int, Boolean) -> Unit, onToggleFullscreen: () -> Unit) {
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var surface by remember { mutableStateOf<Surface?>(null) }
     var playing by remember { mutableStateOf(false) }
@@ -187,7 +225,7 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean, rota
     var duration by remember { mutableIntStateOf(0) }
     var position by remember { mutableIntStateOf(startPosition) }
     var scrubbing by remember { mutableStateOf(false) }
-    val ratio = (if (rotation % 180 == 0) aspect else 1f / aspect).coerceIn(0.4f, 2.5f)
+    val ratio = aspect
 
     DisposableEffect(file) {
         onDispose {
@@ -209,14 +247,18 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean, rota
         }
     }
 
+    // Inline videos use the full width of the bubble and as much height as their aspect ratio
+    // needs. Capping the height cut portrait videos off at the top and bottom.
     val frame = if (fullscreen) Modifier.fillMaxSize()
-    else Modifier.widthIn(max = 290.dp).fillMaxWidth().heightIn(max = 360.dp).aspectRatio(ratio)
-    BoxWithConstraints(frame.clip(RoundedCornerShape(if (fullscreen) 0.dp else 8.dp)).background(Color.Black)) {
-        // TextureView, not VideoView: SurfaceView transforms (the rotate control) are unreliable
-        // on some devices. Lay the texture out in the video's own orientation, then rotate it.
-        val turned = rotation % 180 != 0
-        val videoModifier = if (turned) Modifier.requiredSize(maxHeight, maxWidth)
-        else Modifier.fillMaxSize()
+    else Modifier.widthIn(max = 290.dp).fillMaxWidth().aspectRatio(ratio)
+    BoxWithConstraints(frame.clip(RoundedCornerShape(if (fullscreen) 0.dp else 8.dp))
+        .background(Color.Black)) {
+        val videoModifier = if (fullscreen) {
+            // Fit the whole video inside the screen without changing its aspect ratio.
+            if (aspect >= maxWidth.value / maxHeight.value.coerceAtLeast(1f))
+                Modifier.fillMaxWidth().aspectRatio(aspect)
+            else Modifier.fillMaxHeight().aspectRatio(aspect)
+        } else Modifier.fillMaxSize()
         AndroidView(
             factory = { ctx ->
                 TextureView(ctx).apply {
@@ -267,9 +309,11 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean, rota
                     }
                 }
             },
-            update = { it.rotation = rotation.toFloat() },
             modifier = videoModifier.align(Alignment.Center)
         )
+        // Interop views can swallow Compose gestures. Put a transparent gesture layer over the
+        // video so long-press-to-save works everywhere except on the controls above it.
+        Box(Modifier.matchParentSize().combinedClickable(onClick = {}, onLongClick = onLongClick))
         if (!prepared && !failed) {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(30.dp), strokeWidth = 2.dp)
         }
@@ -320,9 +364,6 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean, rota
                 Text("${formatDuration(position)} / ${formatDuration(duration)}", color = Color.White,
                     fontSize = 10.sp, maxLines = 1)
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onRotate, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Filled.RotateRight, "Rotate video", Modifier.size(19.dp), tint = Color.White)
-                }
                 IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(32.dp)) {
                     Icon(if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
                         if (fullscreen) "Minimize" else "Maximize", Modifier.size(21.dp), tint = Color.White)
@@ -331,6 +372,9 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean, rota
         }
     }
 }
+
+private fun prettyName(name: String): String =
+    if ('%' in name) runCatching { java.net.URLDecoder.decode(name, "UTF-8") }.getOrDefault(name) else name
 
 private fun videoAspect(file: File): Float = runCatching {
     val retriever = MediaMetadataRetriever()
@@ -375,13 +419,15 @@ private fun openWithDefaultApp(context: android.content.Context, file: File, mim
 
 @Composable
 private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
-                            progress: Float?, mime: String, vm: AppViewModel, url: String) {
+                            progress: Float?, mime: String, vm: AppViewModel, url: String,
+                            onLongClick: () -> Unit) {
     val context = LocalContext.current
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember { mutableStateOf(false) }
     var duration by remember { mutableStateOf(0) }
     DisposableEffect(Unit) { onDispose { player?.release(); player = null } }
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick).padding(4.dp)) {
         FilledIconButton(onClick = {
             if (file == null) return@FilledIconButton
             if (playing) { player?.pause(); playing = false }

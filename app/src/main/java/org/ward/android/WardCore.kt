@@ -207,6 +207,26 @@ class WardCore private constructor(val context: Context) {
         return stored
     }
 
+    /**
+     * Forward a message to another chat. Text is copied as-is; attachments are forwarded as
+     * their existing links (the encrypted aesgcm link keeps its key in the fragment), so files do
+     * not need to be uploaded again.
+     */
+    suspend fun forward(target: ChatEntity, message: MessageEntity) {
+        val type = object : TypeToken<List<Map<String, Any>>>() {}.type
+        val atts: List<Map<String, Any>> = runCatching { gson.fromJson<List<Map<String, Any>>>(message.attachmentsJson, type) }
+            .getOrNull() ?: emptyList()
+        val names = atts.mapNotNull { it["name"]?.toString() }.toSet()
+        val parts = mutableListOf<String>()
+        if (message.body.isNotBlank() && message.body !in names) parts.add(message.body)
+        for (a in atts) {
+            val url = a["url"]?.toString()?.takeIf { it.isNotBlank() } ?: continue
+            val name = a["name"]?.toString().orEmpty()
+            parts.add(if (url.startsWith("aesgcm://") && name.isNotBlank()) "$name\n$url" else url)
+        }
+        if (parts.isNotEmpty()) sendText(target, parts.joinToString("\n\n"))
+    }
+
     suspend fun touchChat(chat: ChatEntity, msg: MessageEntity, outgoing: Boolean = false, notify: Boolean = true) {
         val active = isChatActive(chat.id)
         val mentions = msg.mentionsMe

@@ -1,21 +1,26 @@
 package org.ward.android.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -36,7 +41,7 @@ private sealed class Block {
 
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurface,
-                 largeEmoji: Boolean = true) {
+                 largeEmoji: Boolean = true, onLongPress: (() -> Unit)? = null) {
     val blocks = parseBlocks(text)
     Column(modifier) {
         for (b in blocks) {
@@ -48,7 +53,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
                         Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.Top) {
                             Text(b.text.trimEnd(), fontFamily = FontFamily.Monospace, fontSize = 13.sp,
-                                modifier = Modifier.weight(1f).padding(vertical = 6.dp), color = color)
+                                modifier = Modifier.weight(1f).padding(vertical = 6.dp).bubbleLongPress(onLongPress), color = color)
                             IconButton(onClick = {
                                 context.copyText(b.text)
                                 android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
@@ -62,18 +67,22 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
                     Box(Modifier.width(3.dp).heightIn(min = 18.dp).background(MaterialTheme.colorScheme.primary))
                     Spacer(Modifier.width(8.dp))
                     Text(b.lines.joinToString("\n"), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic, style = MaterialTheme.typography.bodyMedium)
+                        fontStyle = FontStyle.Italic, style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.bubbleLongPress(onLongPress))
                 }
                 is Block.Bullet -> Column(Modifier.padding(vertical = 2.dp)) {
                     b.items.forEach { item ->
-                        Row { Text("•  ", color = color); InlineMarkdown(item, color) }
+                        Row {
+                            Text("•  ", color = color, modifier = Modifier.bubbleLongPress(onLongPress))
+                            InlineMarkdown(item, color, onLongPress = onLongPress)
+                        }
                     }
                 }
                 is Block.Table -> Column(Modifier.padding(vertical = 4.dp)) {
                     b.rows.forEachIndexed { i, row ->
                         Row(Modifier.fillMaxWidth()) {
                             row.forEach { cell ->
-                                Text(cell, modifier = Modifier.weight(1f).padding(4.dp),
+                                Text(cell, modifier = Modifier.weight(1f).padding(4.dp).bubbleLongPress(onLongPress),
                                     fontWeight = if (i == 0) FontWeight.Bold else FontWeight.Normal,
                                     style = MaterialTheme.typography.bodySmall, color = color)
                             }
@@ -93,13 +102,14 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
                         else -> MaterialTheme.typography.titleSmall
                     }
                     InlineMarkdown(b.text, color, style,
-                        Modifier.padding(top = if (b.level == 1) 8.dp else 6.dp, bottom = 2.dp))
+                        Modifier.padding(top = if (b.level == 1) 8.dp else 6.dp, bottom = 2.dp), onLongPress)
                 }
                 is Block.Paragraph -> {
                     if (b.text.isNotBlank()) {
                         val emojiOnly = largeEmoji && b.text.length <= 12 && b.text.none { it.isLetterOrDigit() }
-                        if (emojiOnly) Text(b.text, fontSize = 42.sp, modifier = Modifier.padding(vertical = 2.dp))
-                        else InlineMarkdown(b.text, color)
+                        if (emojiOnly) Text(b.text, fontSize = 42.sp,
+                            modifier = Modifier.padding(vertical = 2.dp).bubbleLongPress(onLongPress))
+                        else InlineMarkdown(b.text, color, onLongPress = onLongPress)
                     }
                 }
             }
@@ -110,24 +120,37 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
 @Composable
 private fun InlineMarkdown(text: String, color: Color,
                           style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.bodyLarge,
-                          modifier: Modifier = Modifier) {
+                          modifier: Modifier = Modifier,
+                          onLongPress: (() -> Unit)? = null) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     val annotated = inline(text, color, MaterialTheme.colorScheme.primary)
-    ClickableText(annotated, modifier = modifier, style = style.copy(color = color),
-        onClick = { offset ->
-            val at = offset.coerceIn(0, (annotated.length - 1).coerceAtLeast(0))
-            val code = annotated.getStringAnnotations("CODE", at, at).firstOrNull()
-            if (code != null) {
-                context.copyText(code.item)
-                android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
-            } else {
-                annotated.getStringAnnotations("URL", at, at).firstOrNull()?.let { a ->
-                    runCatching { uri.openUri(a.item) }
+    var layout by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
+    Text(annotated, modifier = modifier.pointerInput(annotated, onLongPress) {
+        detectTapGestures(
+            onTap = { pos ->
+                val offset = layout?.getOffsetForPosition(pos) ?: return@detectTapGestures
+                val at = offset.coerceIn(0, (annotated.length - 1).coerceAtLeast(0))
+                val code = annotated.getStringAnnotations("CODE", at, at).firstOrNull()
+                if (code != null) {
+                    context.copyText(code.item)
+                    android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    annotated.getStringAnnotations("URL", at, at).firstOrNull()?.let { a ->
+                        runCatching { uri.openUri(a.item) }
+                    }
                 }
-            }
-        })
+            },
+            onLongPress = { onLongPress?.invoke() }
+        )
+    }, style = style.copy(color = color), color = color, onTextLayout = { layout = it })
 }
+
+/** Long-press support for text that is not rendered through InlineMarkdown. */
+private fun Modifier.bubbleLongPress(onLongPress: (() -> Unit)?): Modifier =
+    if (onLongPress == null) this else pointerInput(onLongPress) {
+        detectTapGestures(onLongPress = { onLongPress() })
+    }
 
 private fun headingMatch(line: String): Pair<Int, String>? {
     val m = Regex("^\\s{0,3}(#{1,6})\\s+(.+?)\\s*$").find(line) ?: return null
