@@ -46,6 +46,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -635,46 +638,75 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
 
 @Composable
 private fun EmojiPickerDialog(onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    var custom by remember { mutableStateOf("") }
-    val emojis = remember {
-        listOf(
-            "👍", "❤️", "😂", "😮", "😢", "🎉", "😀", "😃", "😄", "😁", "😆", "😅",
-            "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙",
-            "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🥳", "😏",
-            "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺",
-            "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰",
-            "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥", "😶", "😐", "😑", "😬", "🙄",
-            "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴",
-            "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "👏", "🙌", "🤝", "🙏", "💪", "👀",
-            "🔥", "✨", "💯", "✅", "❌", "⭐", "💜", "💙", "💚", "💛", "🧡", "🤍"
-        )
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Choose a reaction") },
-        text = {
-            Column {
-                OutlinedTextField(custom, { custom = it }, label = { Text("Type or paste any emoji") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth())
+    var tone by remember { mutableStateOf("") }
+    val tones = listOf(
+        "" to "\u270B", "\uD83C\uDFFB" to "\u270B\uD83C\uDFFB", "\uD83C\uDFFC" to "\u270B\uD83C\uDFFC",
+        "\uD83C\uDFFD" to "\u270B\uD83C\uDFFD", "\uD83C\uDFFE" to "\u270B\uD83C\uDFFE",
+        "\uD83C\uDFFF" to "\u270B\uD83C\uDFFF"
+    )
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(24.dp),
+            tonalElevation = 6.dp) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Choose a reaction", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(10.dp))
-                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(42.dp),
-                    modifier = Modifier.height(260.dp)
-                ) {
-                    items(emojis.size) { i ->
-                        TextButton(onClick = { onPick(emojis[i]) }) { Text(emojis[i], fontSize = 24.sp) }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("Skin tone", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    for ((value, label) in tones) {
+                        FilterChip(selected = tone == value, onClick = { tone = value },
+                            label = { Text(label, fontSize = 20.sp) })
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                AndroidView(
+                    factory = { ctx ->
+                        androidx.emoji2.emojipicker.EmojiPickerView(ctx).apply {
+                            emojiGridColumns = 8
+                            setOnEmojiPickedListener { item ->
+                                onPick(applySkinTone(item.emoji, tone))
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(360.dp)
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { if (custom.isNotBlank()) onPick(custom.trim()) }, enabled = custom.isNotBlank()) {
-                Text("React")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+        }
+    }
 }
+
+/** Apply one skin tone choice to hand and people emoji the user picks. */
+private fun applySkinTone(emoji: String, tone: String): String {
+    if (tone.isEmpty()) return emoji
+    val tones = listOf("\uD83C\uDFFB", "\uD83C\uDFFC", "\uD83C\uDFFD", "\uD83C\uDFFE", "\uD83C\uDFFF")
+    val existing = tones.firstOrNull { emoji.contains(it) }
+    if (existing != null) return emoji.replace(existing, tone)
+    val first = emoji.codePointAt(0)
+    val base = Character.charCount(first)
+    if (!supportsSkinTone(first)) return emoji
+    var at = base
+    if (emoji.length > at && emoji[at] == '\uFE0F') at++
+    return emoji.substring(0, at) + tone + emoji.substring(at)
+}
+
+private fun supportsSkinTone(cp: Int): Boolean =
+    cp == 0x261D || cp == 0x26F9 || cp == 0x270A || cp == 0x270B || cp == 0x270C || cp == 0x270D ||
+        cp in 0x1F385..0x1F385 || cp in 0x1F3C2..0x1F3C4 || cp in 0x1F3C7..0x1F3C7 ||
+        cp in 0x1F3CA..0x1F3CC || cp in 0x1F442..0x1F443 || cp in 0x1F446..0x1F450 ||
+        cp in 0x1F466..0x1F487 || cp == 0x1F4AA || cp in 0x1F574..0x1F575 ||
+        cp == 0x1F57A || cp == 0x1F590 || cp in 0x1F595..0x1F596 || cp in 0x1F645..0x1F64F ||
+        cp in 0x1F6A3..0x1F6A3 || cp in 0x1F6B4..0x1F6B6 || cp == 0x1F6C0 ||
+        cp in 0x1F90C..0x1F90F || cp in 0x1F918..0x1F91F || cp == 0x1F926 ||
+        cp in 0x1F930..0x1F939 || cp in 0x1F93C..0x1F93E || cp == 0x1F977 ||
+        cp in 0x1F9B5..0x1F9B6 || cp in 0x1F9B8..0x1F9B9 || cp == 0x1F9BB ||
+        cp in 0x1F9CD..0x1F9CF || cp in 0x1F9D1..0x1F9DD || cp in 0x1FAC3..0x1FAC5 ||
+        cp in 0x1FAF0..0x1FAF8
 
 @Composable
 private fun ForwardMessageDialog(vm: AppViewModel, msg: MessageEntity, chats: List<ChatEntity>,

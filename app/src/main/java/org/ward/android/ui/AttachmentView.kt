@@ -188,8 +188,9 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
 
     if (fullscreen) {
         Dialog(onDismissRequest = { fullscreen = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            Box(Modifier.fillMaxSize().background(Color.Black)
+                .windowInsetsPadding(WindowInsets.safeDrawing)) {
                 VideoSurface(file = file, startPosition = position, autoPlay = playing,
                     aspect = aspect, fullscreen = true, onLongClick = onLongClick,
                     onState = { p, isPlaying -> position = p; playing = isPlaying },
@@ -314,6 +315,11 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
         // Interop views can swallow Compose gestures. Put a transparent gesture layer over the
         // video so long-press-to-save works everywhere except on the controls above it.
         Box(Modifier.matchParentSize().combinedClickable(onClick = {}, onLongClick = onLongClick))
+        if (fullscreen) {
+            IconButton(onClick = onToggleFullscreen, modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                Icon(Icons.Filled.Close, "Minimize", tint = Color.White)
+            }
+        }
         if (!prepared && !failed) {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(30.dp), strokeWidth = 2.dp)
         }
@@ -322,7 +328,9 @@ private fun VideoSurface(file: File, startPosition: Int, autoPlay: Boolean,
                 modifier = Modifier.align(Alignment.Center))
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 4.dp, vertical = 2.dp)) {
+            .background(Color.Black.copy(alpha = 0.7f))
+            .then(if (fullscreen) Modifier.navigationBarsPadding() else Modifier)
+            .padding(horizontal = 6.dp, vertical = if (fullscreen) 6.dp else 2.dp)) {
             Slider(
                 value = position.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()),
                 onValueChange = { scrubbing = true; position = it.toInt() },

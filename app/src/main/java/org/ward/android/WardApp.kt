@@ -23,6 +23,11 @@ class WardApp : Application() {
             versionPrefs.edit().putInt("code", BuildConfig.VERSION_CODE).apply()
         }
         CrashHandler.install(this)
+        runCatching {
+            androidx.emoji2.text.DefaultEmojiCompatConfig.create(this)?.let {
+                androidx.emoji2.text.EmojiCompat.init(it)
+            }
+        }
         org.jivesoftware.smack.android.AndroidSmackInitializer.initialize(this)
         WardCore.init(this)
     }
