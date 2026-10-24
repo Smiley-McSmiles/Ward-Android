@@ -25,6 +25,7 @@ object AppLockStore {
     private const val KEY_HASH = "hash"
     private const val KEY_MAX_ATTEMPTS = "max_attempts"
     private const val KEY_LOCKOUT_SECONDS = "lockout_seconds"
+    private const val KEY_LOCK_DELAY_SECONDS = "lock_delay_seconds"
     private const val KEY_FAILED = "failed_attempts"
     private const val KEY_LOCKOUT_UNTIL = "lockout_until"
     private const val ITERATIONS = 120_000
@@ -70,6 +71,13 @@ object AppLockStore {
     fun lockoutSeconds(context: Context): Int = prefs(context).getInt(KEY_LOCKOUT_SECONDS, 30).coerceIn(0, 86_400)
     fun setLockoutSeconds(context: Context, value: Int) {
         prefs(context).edit().putInt(KEY_LOCKOUT_SECONDS, value.coerceIn(0, 86_400)).apply()
+    }
+
+    /** How long Ward may stay in the background before the app lock arms. 0 means immediately. */
+    fun lockDelaySeconds(context: Context): Int =
+        prefs(context).getInt(KEY_LOCK_DELAY_SECONDS, 0).coerceIn(0, 3_600)
+    fun setLockDelaySeconds(context: Context, value: Int) {
+        prefs(context).edit().putInt(KEY_LOCK_DELAY_SECONDS, value.coerceIn(0, 3_600)).apply()
     }
 
     data class Failure(val attempts: Int, val wipe: Boolean, val lockoutUntil: Long)

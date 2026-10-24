@@ -160,6 +160,7 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
     var setupType by remember { mutableStateOf<String?>(null) }
     var maxAttempts by remember { mutableStateOf(AppLockStore.maxAttempts(context)) }
     var lockoutSeconds by remember { mutableStateOf(AppLockStore.lockoutSeconds(context)) }
+    var lockDelaySeconds by remember { mutableStateOf(AppLockStore.lockDelaySeconds(context)) }
 
     BackHandler { onBack() }
     Scaffold(topBar = {
@@ -236,6 +237,20 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                         lockoutSeconds = value
                         AppLockStore.setLockoutSeconds(context, value)
                         AppLockStore.clearFailures(context)
+                    }, label = { Text(label) })
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Text("Lock after leaving", style = MaterialTheme.typography.titleMedium)
+            Text("Briefly switching away can keep Ward unlocked. The lock screen appears after this delay while the app is in the background.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(0 to "Immediately", 15 to "15 seconds", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes").forEach { (value, label) ->
+                    FilterChip(selected = lockDelaySeconds == value, onClick = {
+                        lockDelaySeconds = value
+                        AppLockStore.setLockDelaySeconds(context, value)
                     }, label = { Text(label) })
                 }
             }
