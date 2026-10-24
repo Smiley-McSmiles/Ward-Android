@@ -584,6 +584,15 @@ fun NewGroupDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: 
         mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
     }
     var address by remember { mutableStateOf("") }
+    var addressEdited by remember { mutableStateOf(false) }
+    val accountDomain = accounts.firstOrNull { it.id == accountId }?.domain.orEmpty()
+    val suggestedRoom = name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+    LaunchedEffect(name, accountDomain) {
+        if (!addressEdited) {
+            address = if (suggestedRoom.isBlank() || accountDomain.isBlank()) ""
+            else "$suggestedRoom@conference.$accountDomain"
+        }
+    }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("New group") }, text = {
         Column {
             if (accounts.size > 1) {
@@ -620,12 +629,16 @@ fun NewGroupDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: 
                 }
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(address, { address = it }, label = { Text("Address (optional)") }, singleLine = true)
+            OutlinedTextField(address, { address = it; addressEdited = it.isNotBlank() },
+                label = { Text("Address (optional)") }, singleLine = true,
+                supportingText = if (address.isNotBlank()) ({ Text("Room address") }) else null)
         }
     }, confirmButton = {
         TextButton(onClick = {
             if (name.isBlank() || accountId == 0L) return@TextButton
-            val room = address.ifBlank { name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-') + "@conference." + accounts.first { it.id == accountId }.domain }
+            val room = address.ifBlank {
+                suggestedRoom + "@conference." + accounts.first { it.id == accountId }.domain
+            }
             vm.createGroup(accountId, room, name, private, description, if (private) invitees.toList() else emptyList())
             onDismiss()
         }) { Text("Create") }
