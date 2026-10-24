@@ -499,6 +499,7 @@ fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: (
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
@@ -507,24 +508,68 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
     var accountId by remember(initialAccountId, accounts.map { it.id }) {
         mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add contact") }, text = {
-        Column {
-            if (accounts.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id }, label = { Text(a.displayName) }) }
+    val valid = JidUtil.valid(JidUtil.bare(jid)) && accountId != 0L
+    ModalBottomSheet(onDismissRequest = onDismiss, dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Text("Add contact", style = MaterialTheme.typography.headlineSmall)
+            Text("Send someone a request to share their presence with you.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (accounts.size > 1) {
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (a in accounts) {
+                        FilterChip(selected = accountId == a.id, onClick = { accountId = a.id },
+                            label = { Text(a.displayName) },
+                            leadingIcon = if (accountId == a.id) ({ Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }) else null)
+                    }
+                }
             }
-            OutlinedTextField(jid, { jid = it }, label = { Text("Address") }, singleLine = true)
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(jid, { jid = it }, placeholder = { Text("alex@example.org") },
+                leadingIcon = { Icon(Icons.Filled.AlternateEmail, null) },
+                trailingIcon = {
+                    if (jid.isNotBlank()) IconButton(onClick = { jid = "" }) { Icon(Icons.Filled.Close, "Clear") }
+                },
+                singleLine = true, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth())
+            if (jid.isNotBlank() && !valid) {
+                Text("Enter a full address, like name@example.org",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+            }
             JidSuggestions(jid, accountId, accounts) { jid = it }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(name, { name = it }, label = { Text("Name (optional)") }, singleLine = true)
-            Text("They get a request to share their status with you", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(name, { name = it }, placeholder = { Text("Name (optional)") },
+                leadingIcon = { Icon(Icons.Filled.Person, null) },
+                singleLine = true, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth())
+            if (valid) {
+                Spacer(Modifier.height(16.dp))
+                Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(name.ifBlank { JidUtil.nick(jid) }, 46)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(name.ifBlank { JidUtil.nick(jid) }, fontWeight = FontWeight.Medium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(JidUtil.bare(jid), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Icon(Icons.Filled.PersonAdd, "Add contact", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                Button(enabled = valid, onClick = {
+                    vm.addContactAndOpen(accountId, JidUtil.bare(jid), name)
+                    onDismiss()
+                }, modifier = Modifier.weight(1f)) { Text("Add contact") }
+            }
         }
-    }, confirmButton = {
-        TextButton(onClick = {
-            val j = JidUtil.bare(jid)
-            if (JidUtil.valid(j) && accountId != 0L) { vm.addContactAndOpen(accountId, j, name); onDismiss() }
-        }) { Text("Add") }
-    }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    }
 }
 
 @Composable
