@@ -7,8 +7,10 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -52,6 +54,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     var screen by remember { mutableStateOf("chats") }
     var dialog by remember { mutableStateOf<String?>(null) }
     var search by remember { mutableStateOf("") }
+    var searchMode by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("all") }
     var showArchived by remember { mutableStateOf(false) }
     var accountMenu by remember { mutableStateOf(false) }
@@ -69,6 +72,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     val showChat = selected != null && currentChat != null
     val hasAdmin = accounts.any { it.isAdmin }
     BackHandler(enabled = screen != "chats" && !showChat) { screen = "chats" }
+    BackHandler(enabled = searchMode) { searchMode = false; search = "" }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     AnimatedContent(targetState = screen,
         transitionSpec = {
@@ -81,8 +85,11 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                 initialPage = settingsPage)
             "server" -> ServerTab(vm, accounts, states, PaddingValues(0.dp), onBack = { screen = "chats" })
             else -> Scaffold(
+                containerColor = MaterialTheme.colorScheme.background,
                 topBar = {
-                    TopAppBar(title = {
+                    TopAppBar(colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background), title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box {
                                 TextButton(onClick = { accountMenu = true }) {
@@ -129,6 +136,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                             Text("Ward", fontWeight = FontWeight.Bold)
                         }
                     }, actions = {
+                        IconButton(onClick = { searchMode = true }) { Icon(Icons.Filled.Search, "Search") }
                         Box {
                             IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                             DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
@@ -148,7 +156,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
             ) { pad ->
                 Box(Modifier.fillMaxSize()) {
                     ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it }, showArchived, { showArchived = it }, accountFilter, pad,
-                        onNewChat = { dialog = "new" })
+                        searchMode, onCloseSearch = { searchMode = false; search = "" }, onNewChat = { dialog = "new" })
                     if (hasAdmin) {
                         SmallFloatingActionButton(onClick = { screen = "server" }, shape = CircleShape,
                             containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -222,7 +230,8 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
 fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEntity>, typing: Map<Long, String>,
              states: Map<Long, ConnectionState>, search: String, setSearch: (String) -> Unit,
              filter: String, setFilter: (String) -> Unit, archived: Boolean, setArchived: (Boolean) -> Unit,
-             accountFilter: Long?, pad: PaddingValues, onNewChat: () -> Unit) {
+             accountFilter: Long?, pad: PaddingValues, searchMode: Boolean, onCloseSearch: () -> Unit,
+             onNewChat: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
     var messageResults by remember { mutableStateOf<List<org.ward.android.data.MessageEntity>>(emptyList()) }
     LaunchedEffect(search) {
@@ -238,10 +247,17 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
     val offlineAccount = accounts.firstOrNull {
         (accountFilter == null || it.id == accountFilter) && states[it.id]?.state != "online"
     }
-    Column(Modifier.fillMaxSize().padding(pad)) {
-        OutlinedTextField(search, setSearch, placeholder = { Text("Search chats") }, leadingIcon = { Icon(Icons.Filled.Search, null) },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), singleLine = true,
-            shape = CircleShape)
+    Column(Modifier.fillMaxSize().padding(pad).background(MaterialTheme.colorScheme.background)) {
+        AnimatedVisibility(visible = searchMode, enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()) {
+            Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 12.dp, vertical = 6.dp)) {
+                OutlinedTextField(search, setSearch, placeholder = { Text("Search chats") },
+                    leadingIcon = { Icon(Icons.Filled.Search, null) },
+                    trailingIcon = { IconButton(onClick = onCloseSearch) { Icon(Icons.Filled.Close, "Close search") } },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true, shape = CircleShape)
+            }
+        }
         Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             for ((k, l) in listOf("all" to "All", "unread" to "Unread", "people" to "People", "groups" to "Groups")) {
                 FilterChip(selected = filter == k, onClick = { setFilter(k) }, label = { Text(l) })
@@ -304,7 +320,7 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                     val dismiss = rememberSwipeToDismissBoxState(
                         confirmValueChange = { value ->
                             if (value == SwipeToDismissBoxValue.EndToStart) {
-                                vm.setArchived(chat, true)
+                                vm.setArchived(chat, !archived)
                                 true
                             } else false
                         }
@@ -317,7 +333,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(MaterialTheme.colorScheme.secondaryContainer),
                                 contentAlignment = Alignment.CenterEnd) {
-                                Icon(Icons.Filled.Archive, "Archive", Modifier.padding(end = 24.dp),
+                                Icon(if (archived) Icons.Filled.Unarchive else Icons.Filled.Archive,
+                                    if (archived) "Unarchive" else "Archive", Modifier.padding(end = 24.dp),
                                     tint = MaterialTheme.colorScheme.onSecondaryContainer)
                             }
                         }

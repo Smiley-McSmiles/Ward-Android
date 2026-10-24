@@ -3,13 +3,16 @@ package org.ward.android.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.collectAsState
@@ -96,14 +99,12 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
             if (initialJid != null) vm.openChat(accounts.first().id, initialJid)
         }
     }
-    Box(Modifier.fillMaxSize()) {
-        AnimatedVisibility(visible = !unlocked, enter = fadeIn(tween(180)),
-            exit = fadeOut(tween(220)) + scaleOut(targetScale = 0.975f, animationSpec = tween(220)),
-            label = "unlock") {
-            AppUnlockScreen(context) { unlocked = true }
-        }
-        AnimatedVisibility(visible = unlocked, enter = fadeIn(tween(220)) + scaleIn(initialScale = 0.985f, animationSpec = tween(220)),
-            exit = fadeOut(tween(150)), label = "app") {
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // The app sits behind the lock screen while it zooms in, then the lock slides away.
+        AnimatedVisibility(visible = unlocked,
+            enter = scaleIn(initialScale = 0.8f,
+                animationSpec = tween(320, easing = FastOutSlowInEasing)),
+            exit = ExitTransition.None, label = "app") {
             Crossfade(targetState = accounts.isEmpty() || addingAccount, animationSpec = tween(180), label = "root") { welcome ->
                 if (welcome) {
                     WelcomeScreen(vm, onBack = if (addingAccount) ({ addingAccount = false }) else null)
@@ -115,6 +116,11 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
                     }
                 }
             }
+        }
+        AnimatedVisibility(visible = !unlocked, enter = fadeIn(tween(120)),
+            exit = slideOutVertically(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it },
+            label = "unlock") {
+            AppUnlockScreen(context) { unlocked = true }
         }
     }
 }
