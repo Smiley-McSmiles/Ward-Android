@@ -198,30 +198,41 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     }
     if (addSheet) {
         ModalBottomSheet(onDismissRequest = { addSheet = false }, dragHandle = { BottomSheetDefaults.DragHandle() }) {
-            Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
-                Text("Start something", style = MaterialTheme.typography.headlineSmall)
-                Spacer(Modifier.height(4.dp))
-                Text("Choose what you want to create.", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(14.dp))
-                ListItem(
-                    headlineContent = { Text("New message") },
-                    supportingContent = { Text("Start a chat with an XMPP address") },
-                    leadingContent = { Icon(Icons.Outlined.ChatBubbleOutline, null) },
-                    modifier = Modifier.clickable {
-                        addSheet = false
-                        dialog = "new"
-                    })
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                ListItem(
-                    headlineContent = { Text("Add contact") },
-                    supportingContent = { Text("Send someone a contact request") },
-                    leadingContent = { Icon(Icons.Outlined.PersonAdd, null) },
-                    modifier = Modifier.clickable {
-                        addSheet = false
-                        dialog = "contact"
-                    })
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 32.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                AddAction(
+                    icon = Icons.Outlined.PersonAdd,
+                    label = "Add Contact",
+                    modifier = Modifier.weight(1f)
+                ) {
+                    addSheet = false
+                    dialog = "contact"
+                }
+                AddAction(
+                    icon = Icons.Outlined.ChatBubbleOutline,
+                    label = "New Message",
+                    modifier = Modifier.weight(1f)
+                ) {
+                    addSheet = false
+                    dialog = "new"
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun AddAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String,
+                      modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(34.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh, tonalElevation = 1.dp,
+        modifier = modifier.aspectRatio(1f)) {
+        Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center) {
+            Icon(icon, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(12.dp))
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
 }
