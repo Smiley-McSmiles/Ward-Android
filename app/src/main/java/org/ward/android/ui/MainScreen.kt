@@ -3,6 +3,7 @@ package org.ward.android.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -20,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -27,6 +29,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,8 +72,8 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     AnimatedContent(targetState = screen,
         transitionSpec = {
-            (slideInHorizontally(animationSpec = tween(240)) { it } + fadeIn(tween(180))) togetherWith
-                (slideOutHorizontally(animationSpec = tween(180)) { -it / 4 } + fadeOut(tween(120)))
+            (slideInHorizontally(animationSpec = tween(200)) { it } + fadeIn(tween(140))) togetherWith
+                (slideOutHorizontally(animationSpec = tween(150)) { -it / 4 } + fadeOut(tween(100)))
         }, label = "main") { current ->
         when (current) {
             "settings" -> SettingsTab(vm, accounts, states, PaddingValues(0.dp),
@@ -173,7 +176,9 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
             }) { Text("Connect") } },
             dismissButton = { TextButton(onClick = { passwordFor = null }) { Text("Cancel") } })
     }
-    if (showChat) {
+    AnimatedVisibility(visible = showChat,
+        enter = slideInHorizontally(animationSpec = tween(170)) { it / 4 } + fadeIn(tween(120)),
+        exit = ExitTransition.None, label = "chat") {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { ChatScreen(vm) }
     }
     }
@@ -246,7 +251,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
         }
         val shownRequests = requests.filter { accountFilter == null || it.accountId == accountFilter }
         if (shownRequests.isNotEmpty()) {
-            Card(onClick = { vm.selectChat(shownRequests.first().chatId) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+            Card(onClick = { vm.selectChat(shownRequests.first().chatId) }, shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.MarkEmailUnread, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(10.dp))
@@ -256,7 +262,9 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
             }
         }
         if (offlineAccount != null && states[offlineAccount.id]?.state != "connecting") {
-            Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
+            Surface(color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.WifiOff, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
@@ -293,8 +301,30 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                     item { HorizontalDivider() }
                 }
                 items(visible, key = { it.id }) { chat ->
-                    ChatRow(chat, typing[chat.id] ?: "", onClick = { vm.selectChat(chat.id) },
-                        modifier = Modifier)
+                    val dismiss = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            if (value == SwipeToDismissBoxValue.EndToStart) {
+                                vm.setArchived(chat, true)
+                                true
+                            } else false
+                        }
+                    )
+                    SwipeToDismissBox(
+                        state = dismiss,
+                        enableDismissFromStartToEnd = false,
+                        backgroundContent = {
+                            Box(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 3.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(MaterialTheme.colorScheme.secondaryContainer),
+                                contentAlignment = Alignment.CenterEnd) {
+                                Icon(Icons.Filled.Archive, "Archive", Modifier.padding(end = 24.dp),
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            }
+                        }
+                    ) {
+                        ChatRow(chat, typing[chat.id] ?: "", onClick = { vm.selectChat(chat.id) },
+                            modifier = Modifier)
+                    }
                 }
             }
         }
@@ -382,7 +412,7 @@ fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: (
             LazyColumn(Modifier.heightIn(max = 240.dp)) {
                 items(contacts.filter { it.inRoster && (accountId == 0L || it.accountId == accountId) }.take(20)) { c ->
                     ListItem(headlineContent = { Text(c.name) }, supportingContent = { Text(c.jid) },
-                        leadingContent = { Avatar(c.name, 34, show = c.presence) },
+                        leadingContent = { Avatar(c.name, 34, photo = c.avatar, show = c.presence) },
                         modifier = Modifier.clickable { jid = c.jid })
                 }
             }

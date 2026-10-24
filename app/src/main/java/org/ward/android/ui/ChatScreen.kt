@@ -16,6 +16,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -45,6 +46,8 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -57,6 +60,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -188,7 +192,8 @@ fun ChatScreen(vm: AppViewModel) {
                 navigationIcon = { IconButton(onClick = { vm.selectChat(null) }) { Icon(Icons.Filled.ArrowBack, "Back") } },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { details = true }) {
-                        Avatar(c.displayName, 34, show = if (c.isGroup) null else contact?.presence)
+                        Avatar(c.displayName, 34, photo = if (c.isGroup) c.avatar else contact?.avatar ?: c.avatar,
+                            show = if (c.isGroup) null else contact?.presence)
                         Spacer(Modifier.width(8.dp))
                         Column {
                             Text(c.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 17.sp)
@@ -395,7 +400,9 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
             .graphicsLayer { alpha = enter.value; translationY = (1f - enter.value) * 45f }
             .padding(horizontal = 10.dp, vertical = if (grouping) 1.dp else 5.dp),
         horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
-        if (!outgoing && !grouping) Avatar(name, 34, show = if (chat.isGroup) null else contact?.presence) else if (!outgoing) Spacer(Modifier.width(34.dp))
+        if (!outgoing && !grouping) Avatar(name, 34,
+            photo = if (chat.isGroup) chat.avatar else contact?.avatar ?: chat.avatar,
+            show = if (chat.isGroup) null else contact?.presence) else if (!outgoing) Spacer(Modifier.width(34.dp))
         Spacer(Modifier.width(8.dp))
         Column(Modifier.widthIn(max = 560.dp)) {
             if (!grouping && !outgoing) {
@@ -409,9 +416,27 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                 singleLine -> RoundedCornerShape(50)
                 else -> RoundedCornerShape(26.dp)
             }
+            var swipeX by remember(m.id) { mutableFloatStateOf(0f) }
+            val maxSwipe = with(androidx.compose.ui.platform.LocalDensity.current) { 96.dp.toPx() }
+            val replyThreshold = maxSwipe * 0.65f
+            val swipeModifier = if (m.retracted == 0) Modifier
+                .offset { IntOffset(swipeX.roundToInt(), 0) }
+                .pointerInput(m.id) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, amount ->
+                            change.consume()
+                            swipeX = (swipeX + amount).coerceIn(0f, maxSwipe)
+                        },
+                        onDragEnd = {
+                            if (swipeX >= replyThreshold) onReply()
+                            swipeX = 0f
+                        },
+                        onDragCancel = { swipeX = 0f }
+                    )
+                } else Modifier
             Surface(color = color, shape = shape,
                 tonalElevation = 0.dp,
-                modifier = Modifier.combinedClickable(onLongClick = onLongPress, onClick = {})) {
+                modifier = swipeModifier.combinedClickable(onLongClick = onLongPress, onClick = {})) {
                 Column(Modifier.padding(horizontal = if (bubble) 14.dp else 8.dp, vertical = if (bubble) 10.dp else 4.dp)) {
                     if (m.replyTo.isNotBlank()) {
                         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(6.dp),
@@ -440,6 +465,10 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                             MarkdownText(m.body, largeEmoji = vm.settings.bool("appearance.large_emoji"),
                                 onLongPress = onLongPress)
                         }
+                        if (m.status == -1 && m.error.isNotBlank()) {
+                            Text(m.error, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 3.dp))
+                        }
                         if (m.kind == "me") { /* already rendered with /me prefix */ }
                     }
                     Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -455,7 +484,7 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (outgoing) {
                             Spacer(Modifier.width(4.dp))
-                            Icon(when (m.status) { -1 -> Icons.Filled.Error; 3 -> Icons.Filled.DoneAll; 2 -> Icons.Filled.DoneAll; else -> Icons.Filled.Done },
+                            Icon(when (m.status) { -1 -> Icons.Filled.Error; 0 -> Icons.Filled.Schedule; 3 -> Icons.Filled.DoneAll; 2 -> Icons.Filled.DoneAll; else -> Icons.Filled.Done },
                                 "Status", Modifier.size(13.dp), tint = if (m.status >= 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -509,13 +538,13 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                     Column(Modifier.weight(1f)) {
                         Text(if (editing != null) "Edit message" else "Reply to ${replyTo?.senderName}",
                             fontWeight = FontWeight.Medium, fontSize = 12.sp)
-                        Text((editing ?: replyTo)?.body?.lineSequence()?.firstOrNull() ?: "", maxLines =  sky(1),
+                        Text((editing ?: replyTo)?.body?.lineSequence()?.firstOrNull() ?: "", maxLines = 1,
                             overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onCancelReply) { Icon(Icons.Filled.Close, "Cancel") }
                 }
             }
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onAttach) { Icon(Icons.Filled.AttachFile, "Attach") }
                 Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.Bottom) {
@@ -541,7 +570,6 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
         }
     }
 }
-private fun sky(n: Int) = n
 
 @Composable
 private fun MessageDetailsDialog(chat: ChatEntity, msg: MessageEntity, onDismiss: () -> Unit) {
@@ -744,7 +772,7 @@ private fun ForwardMessageDialog(vm: AppViewModel, msg: MessageEntity, chats: Li
                     ListItem(
                         headlineContent = { Text(target.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         supportingContent = { Text(account?.jid ?: target.jid, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        leadingContent = { Avatar(target.displayName, 32, show = null) },
+                        leadingContent = { Avatar(target.displayName, 32, photo = target.avatar, show = null) },
                         modifier = Modifier.clickable {
                             vm.forward(target, msg)
                             onDismiss()
@@ -776,7 +804,8 @@ fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Avatar(chat.displayName, 72, show = if (chat.isGroup) null else contact?.presence)
+                Avatar(chat.displayName, 72, photo = if (chat.isGroup) chat.avatar else contact?.avatar ?: chat.avatar,
+                    show = if (chat.isGroup) null else contact?.presence)
                 Spacer(Modifier.width(14.dp))
                 Column {
                     Text(chat.displayName, style = MaterialTheme.typography.headlineSmall)

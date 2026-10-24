@@ -61,14 +61,18 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     val downloadName = if (usableName || wantedExtension.isBlank()) name else name + wantedExtension
     val size = (a["size"] as? Number)?.toLong() ?: 0L
     val encrypted = url.startsWith("aesgcm://")
-    var file by remember(url) { mutableStateOf<File?>(null) }
+    val pending = a["pending"] == true
+    val localPath = a["local"]?.toString()?.takeIf { it.isNotBlank() }
+        ?: if (url.startsWith("local://")) url.removePrefix("local://") else null
+    val localFile = localPath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
+    var file by remember(url) { mutableStateOf(localFile) }
     var failed by remember(url) { mutableStateOf(false) }
-    var loading by remember(url) { mutableStateOf(true) }
+    var loading by remember(url) { mutableStateOf(localFile == null) }
     val progressMap by vm.core.downloadProgress.collectAsState()
     val progress = progressMap[url]
     val context = LocalContext.current
     LaunchedEffect(url) {
-        file = vm.core.localFile(url, downloadName, mime)
+        if (file == null) file = vm.core.localFile(url, downloadName, mime)
         failed = file == null
         loading = false
     }
@@ -105,11 +109,17 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     when {
         mime.startsWith("image/") -> Box(Modifier.widthIn(max = 290.dp).heightIn(max = 320.dp), contentAlignment = Alignment.Center) {
             val image = file
-            if (image != null) AsyncImage(model = image, contentDescription = name,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).combinedClickable(
-                    onClick = { openWithDefaultApp(context, image, mime) },
-                    onLongClick = { saveFile() }
-                ), contentScale = ContentScale.Fit)
+            if (image != null) Box {
+                AsyncImage(model = image, contentDescription = name,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).combinedClickable(
+                        onClick = { openWithDefaultApp(context, image, mime) },
+                        onLongClick = { saveFile() }
+                    ), contentScale = ContentScale.Fit)
+                if (pending) Surface(color = Color.Black.copy(alpha = 0.55f), shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp)) {
+                    Text("Sending…", color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+            }
             else if (loading) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.height(6.dp))
@@ -120,8 +130,8 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
             }
             else Text(if (failed) "Could not load image" else name, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
-        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, mime, ::saveFile)
-        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url, ::saveFile)
+        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, mime, pending, ::saveFile)
+        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url, pending, ::saveFile)
         else -> {
             Row(Modifier.combinedClickable(
                 onClick = {
@@ -141,7 +151,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
                         Text("Downloading… ${if (progress != null) "${(progress * 100).toInt()}%" else ""}",
                             fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
-                        Text(if (failed) "Download failed" else formatBytes(size) +
+                        Text(if (pending) "Sending…" else if (failed) "Download failed" else formatBytes(size) +
                             if (encrypted) " · encrypted" else "", fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -153,7 +163,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
 
 @Composable
 private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
-                            progress: Float?, size: Long, encrypted: Boolean, mime: String,
+                            progress: Float?, size: Long, encrypted: Boolean, mime: String, pending: Boolean,
                             onLongClick: () -> Unit) {
     if (file == null) {
         Box(Modifier.widthIn(max = 290.dp).fillMaxWidth().height(150.dp)
@@ -188,7 +198,7 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
     Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(name, fontSize = 11.sp, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(6.dp))
-        Text(listOfNotNull(
+        Text(if (pending) "Sending…" else listOfNotNull(
             size.takeIf { it > 0 }?.let { formatBytes(it) },
             if (encrypted) "encrypted" else null
         ).joinToString(" · "), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -384,7 +394,7 @@ private fun openWithDefaultApp(context: android.content.Context, file: File, mim
 
 @Composable
 private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
-                            progress: Float?, mime: String, vm: AppViewModel, url: String,
+                            progress: Float?, mime: String, vm: AppViewModel, url: String, pending: Boolean,
                             onLongClick: () -> Unit) {
     val context = LocalContext.current
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
@@ -419,7 +429,7 @@ private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed:
                 Text("Downloading… ${if (progress != null) "${(progress * 100).toInt()}%" else ""}",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Text(if (failed) "Download failed" else if (duration > 0) "${duration / 1000}s · encrypted audio" else "Voice message",
+                Text(if (pending) "Sending…" else if (failed) "Download failed" else if (duration > 0) "${duration / 1000}s · encrypted audio" else "Voice message",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

@@ -33,6 +33,7 @@ import org.jivesoftware.smackx.httpfileupload.HttpFileUploadManager
 import org.jivesoftware.smackx.httpfileupload.UploadService
 import org.jivesoftware.smackx.mam.MamManager
 import org.jivesoftware.smackx.pubsub.*
+import org.jivesoftware.smackx.pubsub.listener.ItemEventListener
 import org.jivesoftware.smackx.muc.*
 import org.jivesoftware.smackx.omemo.OmemoConfiguration
 import org.jivesoftware.smackx.omemo.OmemoManager
@@ -69,6 +70,9 @@ import java.net.URL
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
+private const val AVATAR_META_NS = "urn:xmpp:avatar:metadata"
+private const val AVATAR_DATA_NS = "urn:xmpp:avatar:data"
+
 data class OccupantInfo(val nick: String, val jid: String, val role: String, val affiliation: String,
                         val status: String = "", val isSelf: Boolean = false)
 
@@ -94,6 +98,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         private set
     private val gson = Gson()
     private val legacyDeviceRefreshes = mutableSetOf<String>()
+    private val avatarWatches = mutableSetOf<String>()
+    private val avatarFetches = mutableSetOf<String>()
     private val rooms = ConcurrentHashMap<String, MultiUserChat>()
     private val _occupants = MutableStateFlow<Map<String, List<OccupantInfo>>>(emptyMap())
     val occupants: StateFlow<Map<String, List<OccupantInfo>>> = _occupants
@@ -258,6 +264,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     private fun setupRoster(conn: XMPPConnection) {
+        synchronized(avatarWatches) { avatarWatches.clear() }
+        synchronized(avatarFetches) { avatarFetches.clear() }
         // The Roster instance is usually created when the connection is created, i.e. before this
         // method runs. Set both the static default and the existing instance to manual, otherwise
         // Smack silently rejects every incoming subscription request before the UI can see it.
@@ -286,6 +294,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         syncRoster(roster)
         roster.reloadAndWait()
         syncRoster(roster)
+        scope.launch {
+            runCatching { publishLocalAvatarIfDirty(conn) }
+            watchAvatar(conn, account.jid, own = true)
+        }
     }
 
     private fun syncRoster(roster: Roster) {
@@ -311,6 +323,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     presence = if (pres != null && pres.isAvailable) showOf(pres) else old?.presence ?: "offline",
                     status = pres?.status ?: old?.status ?: "",
                     nickname = old?.nickname ?: "", avatar = old?.avatar ?: ""))
+                connection?.let { watchAvatar(it, jid) }
             }
             // remove contacts no longer in the roster, keeping chat-only contacts
             for (c in core.dao.contactsNow(account.id)) {
@@ -1954,12 +1967,158 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         scope.launch {
             runCatching {
                 val conn = connection ?: return@runCatching
-                val vcard = org.jivesoftware.smackx.vcardtemp.VCardManager.getInstanceFor(conn)
-                val card = vcard.loadVCard(conn.user.asEntityBareJidIfPossible())
-                card.setField("PHOTO", Base64.getEncoder().encodeToString(bytes))
-                vcard.saveVCard(card)
+                publishAvatarNow(conn, bytes, mime)
+                core.setAccountOption(account, "avatar_dirty", "")
+            }.onFailure {
+                core.addXmlLog(account.id, false, "Avatar publish failed: ${it.message}")
             }
         }
+    }
+
+    private suspend fun publishAvatarNow(conn: XMPPConnection, bytes: ByteArray, mime: String) {
+        val vcard = org.jivesoftware.smackx.vcardtemp.VCardManager.getInstanceFor(conn)
+        val card = vcard.loadVCard(conn.user.asEntityBareJidIfPossible())
+        card.setField("PHOTO", Base64.getEncoder().encodeToString(bytes))
+        vcard.saveVCard(card)
+        publishPepAvatar(conn, bytes, mime)
+    }
+
+    /** Re-publish a photo the user chose while offline so other clients receive it on reconnect. */
+    private suspend fun publishLocalAvatarIfDirty(conn: XMPPConnection) {
+        if (core.accountOption(account, "avatar_dirty") != "true") return
+        val path = android.net.Uri.parse(account.avatar).path ?: return
+        val f = File(path)
+        if (!f.exists() || f.length() == 0L) return
+        val bytes = withContext(Dispatchers.IO) { f.readBytes() }
+        publishAvatarNow(conn, bytes, org.ward.android.xmpp.guessMime(f.name))
+        core.setAccountOption(account, "avatar_dirty", "")
+    }
+
+    private fun publishPepAvatar(conn: XMPPConnection, bytes: ByteArray, mime: String) {
+        val digest = java.security.MessageDigest.getInstance("SHA-1").digest(bytes)
+        val id = digest.joinToString("") { "%02x".format(it) }
+        val pm = PubSubManager.getInstanceFor(conn, conn.user.asBareJid())
+        val dataNode = pm.getOrCreateLeafNode(AVATAR_DATA_NS)
+        configureAvatarNode(dataNode)
+        val data = StandardExtensionElement.builder("data", AVATAR_DATA_NS)
+            .setText(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)).build()
+        dataNode.publish(PayloadItem(id, data))
+        val metadataNode = pm.getOrCreateLeafNode(AVATAR_META_NS)
+        configureAvatarNode(metadataNode)
+        val info = StandardExtensionElement.builder("info", AVATAR_META_NS)
+            .addAttribute("id", id)
+            .addAttribute("bytes", bytes.size.toString())
+            .addAttribute("type", mime.ifBlank { "image/png" })
+            .build()
+        val metadata = StandardExtensionElement.builder("metadata", AVATAR_META_NS)
+            .addElement(info).build()
+        metadataNode.publish(PayloadItem("current", metadata))
+        core.addXmlLog(account.id, false, "Published PEP avatar $id")
+    }
+
+    private fun configureAvatarNode(node: LeafNode) {
+        runCatching {
+            val form = node.getNodeConfiguration().fillableForm
+            form.setAccessModel(AccessModel.open)
+            form.setPersistentItems(true)
+            form.setMaxItems(1)
+            node.sendConfigurationForm(form)
+        }
+    }
+
+    /** Watch a contact's (or our own) XEP-0084 avatar metadata and cache the image locally. */
+    private fun watchAvatar(conn: XMPPConnection, jid: String, own: Boolean = false) {
+        val bare = runCatching { JidCreate.entityBareFrom(jid) }.getOrNull() ?: return
+        val key = (if (own) "own:" else "contact:") + bare
+        synchronized(avatarWatches) { if (!avatarWatches.add(key)) return }
+        scope.launch {
+            runCatching {
+                val pm = PubSubManager.getInstanceFor(conn, bare)
+                val node = runCatching { pm.getLeafNode(AVATAR_META_NS) }.getOrNull() ?: return@runCatching
+                node.addItemEventListener(object : ItemEventListener<Item> {
+                    override fun handlePublishedItems(event: ItemPublishEvent<Item>) {
+                        for (item in event.items) scope.launch {
+                            runCatching { handleAvatarMetadata(conn, bare.toString(), item, own) }
+                        }
+                    }
+                })
+                for (item in node.getItems<Item>()) {
+                    runCatching { handleAvatarMetadata(conn, bare.toString(), item, own) }
+                }
+            }.onFailure {
+                // No avatar node yet: retry on the next roster sync instead of logging noise.
+                synchronized(avatarWatches) { avatarWatches.remove(key) }
+            }
+        }
+    }
+
+    private suspend fun handleAvatarMetadata(conn: XMPPConnection, jid: String, item: Item, own: Boolean) {
+        val xml = item.toXML(XmlEnvironment.EMPTY).toString()
+        val doc = parseXml(xml)
+        val infos = doc.getElementsByTagNameNS(AVATAR_META_NS, "info")
+        var id = ""
+        var mime = "image/png"
+        for (i in 0 until infos.length) {
+            val el = infos.item(i) as? org.w3c.dom.Element ?: continue
+            val candidate = el.getAttribute("id")
+            if (candidate.isNotBlank()) {
+                id = candidate
+                mime = el.getAttribute("type").ifBlank { mime }
+                break
+            }
+        }
+        if (id.isBlank()) return
+        val file = avatarFile(id, mime)
+        if (!file.exists() || file.length() == 0L) {
+            val fetchKey = "$jid|$id"
+            synchronized(avatarFetches) { if (!avatarFetches.add(fetchKey)) return }
+            try {
+                val dataNode = PubSubManager.getInstanceFor(conn,
+                    JidCreate.entityBareFrom(jid)).getLeafNode(AVATAR_DATA_NS)
+                val dataItems = dataNode.getItems<Item>(listOf(id))
+                val dataItem = dataItems.firstOrNull { it.id == id } ?: return
+                val dataXml = dataItem.toXML(XmlEnvironment.EMPTY).toString()
+                val dataDoc = parseXml(dataXml)
+                val dataEl = dataDoc.getElementsByTagNameNS(AVATAR_DATA_NS, "data").item(0) as? org.w3c.dom.Element
+                    ?: return
+                val bytes = android.util.Base64.decode(dataEl.textContent.trim(), android.util.Base64.DEFAULT)
+                file.parentFile?.mkdirs()
+                file.writeBytes(bytes)
+            } finally {
+                synchronized(avatarFetches) { avatarFetches.remove(fetchKey) }
+            }
+        }
+        val uri = Uri.fromFile(file).toString()
+        if (own) {
+            val acc = core.dao.account(account.id) ?: return
+            if (acc.avatar != uri) {
+                core.updateAccount(acc.copy(avatar = uri))
+                account = account.copy(avatar = uri)
+            }
+        } else {
+            val contact = core.dao.contact(account.id, jid) ?: return
+            if (contact.avatar != uri) {
+                core.dao.insertContact(contact.copy(avatar = uri))
+                core.dao.chat(account.id, jid)?.let { core.dao.updateChat(it.copy(avatar = uri)) }
+            }
+        }
+    }
+
+    private fun parseXml(xml: String): org.w3c.dom.Document {
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        factory.isNamespaceAware = true
+        return factory.newDocumentBuilder().parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
+    }
+
+    private fun avatarFile(id: String, mime: String): File {
+        val ext = when {
+            mime.contains("jpeg", true) || mime.contains("jpg", true) -> "jpg"
+            mime.contains("webp", true) -> "webp"
+            mime.contains("gif", true) -> "gif"
+            else -> "png"
+        }
+        val safeId = id.filter { it.isLetterOrDigit() }.ifBlank { "avatar" }
+        return File(core.context.filesDir, "avatars/$safeId.$ext")
     }
 
     fun publishNick(nick: String) {

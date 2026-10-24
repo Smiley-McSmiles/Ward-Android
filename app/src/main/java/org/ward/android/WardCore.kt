@@ -159,9 +159,18 @@ class WardCore private constructor(val context: Context) {
     suspend fun ensureChat(accountId: Long, jid: String, type: String = "chat", name: String = ""): ChatEntity {
         val bare = JidUtil.bare(jid)
         val existing = dao.chat(accountId, bare)
-        if (existing != null) return existing
+        val existingContact = dao.contact(accountId, bare)
+        if (existing != null) {
+            val avatar = existingContact?.avatar.orEmpty()
+            if (existing.avatar.isBlank() && avatar.isNotBlank()) {
+                val updated = existing.copy(avatar = avatar)
+                dao.updateChat(updated)
+                return updated
+            }
+            return existing
+        }
         val acc = dao.account(accountId)
-        val contact = dao.contact(accountId, bare)
+        val contact = existingContact
         val display = name.ifBlank { contact?.name ?: if (type == "groupchat") bare.substringBefore('@') else JidUtil.nick(bare) }
         val defaultEnc = acc?.let { accountEncryptionDefault(it) } ?: "default"
         val encryption = when {
@@ -170,7 +179,7 @@ class WardCore private constructor(val context: Context) {
             else -> "default"
         }
         val id = dao.insertChat(ChatEntity(accountId = accountId, jid = bare, type = type, name = display,
-            encryption = encryption))
+            encryption = encryption, avatar = contact?.avatar ?: ""))
         return dao.chat(id) ?: dao.chat(accountId, bare)!!
     }
 
@@ -321,37 +330,54 @@ class WardCore private constructor(val context: Context) {
             context.contentResolver.openInputStream(uri)?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
         }
         val acc = dao.account(chat.accountId) ?: return null
+        val id = JidUtil.randomId()
+        val placeholderAttachments = listOf(mapOf(
+            "url" to "local://${tmp.absolutePath}", "local" to tmp.absolutePath,
+            "name" to name, "mime" to mime, "size" to tmp.length(), "pending" to true
+        ))
+        val placeholder = MessageEntity(chatId = chat.id, stanzaId = id, originId = id, msgId = id,
+            sender = acc.jid, senderJid = acc.jid, senderName = acc.displayName, direction = 1,
+            timestamp = System.currentTimeMillis(), body = name, kind = "file",
+            attachmentsJson = gson.toJson(placeholderAttachments), status = 0)
+        val localId = dao.insertMessage(placeholder)
+        if (localId < 0) return null
+        val stored = placeholder.copy(id = localId)
+        touchChat(chat, stored, outgoing = true)
+
+        suspend fun fail(reason: String): MessageEntity {
+            val failedAttachments = placeholderAttachments.map { it - "pending" }
+            val failed = stored.copy(status = -1, error = reason,
+                attachmentsJson = gson.toJson(failedAttachments))
+            dao.updateMessage(failed)
+            return failed
+        }
+
         val encryptedChat = effectiveEncryption(chat, acc) != "off"
-        var uploadFile = tmp
         var link = ""
         var fileEncrypted = false
         if (encryptedChat) {
             val enc = File(context.cacheDir, tmp.name + ".aesgcm")
-            val (key, iv) = withContext(Dispatchers.IO) { org.ward.android.util.FileCrypto.encrypt(tmp, enc) }
-            uploadFile = enc
-            val https = session.upload(enc, name + ".enc", "application/octet-stream") ?: run {
-                dao.insertMessage(MessageEntity(chatId = chat.id, sender = acc.jid, direction = 1,
-                    body = name, kind = "file", status = -1, error = "Upload failed"))
-                return null
-            }
-            link = org.ward.android.util.FileCrypto.aesgcmUrl(https, iv, key)
+            val keys = withContext(Dispatchers.IO) {
+                runCatching { org.ward.android.util.FileCrypto.encrypt(tmp, enc) }.getOrNull()
+            } ?: return fail("Could not encrypt file")
+            val https = withContext(Dispatchers.IO) {
+                runCatching { session.upload(enc, name + ".enc", "application/octet-stream") }.getOrNull()
+            } ?: return fail("Upload failed")
+            link = org.ward.android.util.FileCrypto.aesgcmUrl(https, keys.second, keys.first)
             fileEncrypted = true
         } else {
-            link = session.upload(tmp, name, mime) ?: return null
+            link = withContext(Dispatchers.IO) {
+                runCatching { session.upload(tmp, name, mime) }.getOrNull()
+            } ?: return fail("Upload failed")
         }
-        val id = JidUtil.randomId()
-        val size = uploadFile.length()
-        val attachments = listOf(mapOf("url" to link, "name" to name, "mime" to mime, "size" to size,
-            "encrypted" to fileEncrypted))
-        val msg = MessageEntity(chatId = chat.id, stanzaId = id, originId = id, msgId = id,
-            sender = acc.jid, direction = 1, timestamp = System.currentTimeMillis(), body = name,
-            kind = if (mime.startsWith("audio/")) "file" else "file",
-            attachmentsJson = gson.toJson(attachments), status = 0)
-        val local = dao.insertMessage(msg)
-        val stored = msg.copy(id = local)
-        touchChat(chat, stored, outgoing = true)
-        session.sendFile(chat, stored, link, name, mime, size, fileEncrypted)
-        return stored
+        val attachments = listOf(mapOf(
+            "url" to link, "local" to tmp.absolutePath, "name" to name, "mime" to mime,
+            "size" to tmp.length(), "encrypted" to fileEncrypted
+        ))
+        val updated = stored.copy(attachmentsJson = gson.toJson(attachments), status = 0)
+        dao.updateMessage(updated)
+        session.sendFile(chat, updated, link, name, mime, tmp.length(), fileEncrypted)
+        return updated
     }
 
     suspend fun localFile(url: String, name: String, mime: String): File? {

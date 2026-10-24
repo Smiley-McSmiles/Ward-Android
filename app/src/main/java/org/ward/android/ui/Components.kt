@@ -62,8 +62,11 @@ fun PresenceDot(show: String, size: Int = 10) {
 
 @Composable
 fun ChatRow(chat: ChatEntity, typing: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+        modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)) {
     ListItem(
-        modifier = modifier.clickable(onClick = onClick).padding(horizontal = 6.dp),
+        modifier = Modifier,
         leadingContent = { Avatar(chat.displayName, 44, chat.avatar.ifBlank { "" }, show = null) },
         headlineContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -81,7 +84,7 @@ fun ChatRow(chat: ChatEntity, typing: String, onClick: () -> Unit, modifier: Mod
                     chat.preview.isNotBlank() -> if (chat.isGroup) "${chat.previewSender}: ${chat.preview}" else chat.preview
                     else -> "No messages yet"
                 }
-                Text(preview, maxLines =  pup(1), overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                     fontSize = 14.sp, color = if (typing.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = if (chat.unread > 0) FontWeight.Medium else FontWeight.Normal)
                 if (chat.mutedUntil == -1L || chat.mutedUntil > System.currentTimeMillis()) Icon(Icons.Filled.NotificationsOff, null, Modifier.size(15.dp))
@@ -95,14 +98,14 @@ fun ChatRow(chat: ChatEntity, typing: String, onClick: () -> Unit, modifier: Mod
         },
         trailingContent = null
     )
+    }
 }
-private fun pup(n: Int) = n
 
 @Composable
 fun ContactRow(contact: ContactEntity, onClick: () -> Unit) {
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
-        leadingContent = { Avatar(contact.name, 40, show = contact.presence) },
+        leadingContent = { Avatar(contact.name, 40, photo = contact.avatar, show = contact.presence) },
         headlineContent = { Text(contact.name, fontWeight = FontWeight.Medium) },
         supportingContent = {
             Text(if (contact.presence == "offline") contact.jid else contact.status.ifBlank {

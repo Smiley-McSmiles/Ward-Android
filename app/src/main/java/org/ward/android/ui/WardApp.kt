@@ -1,9 +1,17 @@
 package org.ward.android.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
@@ -68,6 +76,17 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
     // The service keeps receiving while the lock screen is visible. The foreground check is
     // disabled while locked so messages can still raise notifications.
     LaunchedEffect(unlocked) { vm.core.setAppForeground(unlocked) }
+    // Pattern unlock is unreliable in landscape, so keep the lock screen in portrait. The rest
+    // of the app stays free to follow the device rotation.
+    val activity = context as? android.app.Activity
+    DisposableEffect(unlocked, activity) {
+        activity?.requestedOrientation = if (unlocked)
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onDispose {
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
     val accounts by vm.accounts.collectAsState()
     var addingAccount by remember { mutableStateOf(false) }
     LaunchedEffect(accounts.size) {
@@ -77,18 +96,24 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
             if (initialJid != null) vm.openChat(accounts.first().id, initialJid)
         }
     }
-    if (!unlocked) {
-        AppUnlockScreen(context) { unlocked = true }
-        return
-    }
-    Crossfade(targetState = accounts.isEmpty() || addingAccount, animationSpec = tween(240), label = "root") { welcome ->
-        if (welcome) {
-            WelcomeScreen(vm, onBack = if (addingAccount) ({ addingAccount = false }) else null)
-            if (addingAccount) BackHandler { addingAccount = false }
-        } else {
-            val call by vm.core.call.collectAsState()
-            Crossfade(targetState = call != null, animationSpec = tween(180), label = "call") { inCall ->
-                if (inCall) CallOverlay(vm) else MainScreen(vm, onAddAccount = { addingAccount = true })
+    Box(Modifier.fillMaxSize()) {
+        AnimatedVisibility(visible = !unlocked, enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(220)) + scaleOut(targetScale = 0.975f, animationSpec = tween(220)),
+            label = "unlock") {
+            AppUnlockScreen(context) { unlocked = true }
+        }
+        AnimatedVisibility(visible = unlocked, enter = fadeIn(tween(220)) + scaleIn(initialScale = 0.985f, animationSpec = tween(220)),
+            exit = fadeOut(tween(150)), label = "app") {
+            Crossfade(targetState = accounts.isEmpty() || addingAccount, animationSpec = tween(180), label = "root") { welcome ->
+                if (welcome) {
+                    WelcomeScreen(vm, onBack = if (addingAccount) ({ addingAccount = false }) else null)
+                    if (addingAccount) BackHandler { addingAccount = false }
+                } else {
+                    val call by vm.core.call.collectAsState()
+                    Crossfade(targetState = call != null, animationSpec = tween(160), label = "call") { inCall ->
+                        if (inCall) CallOverlay(vm) else MainScreen(vm, onAddAccount = { addingAccount = true })
+                    }
+                }
             }
         }
     }

@@ -239,6 +239,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
                 val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
                 vm.core.scope.launch {
                     vm.core.updateAccount(acc.copy(avatar = android.net.Uri.fromFile(file).toString()))
+                    vm.core.setAccountOption(acc, "avatar_dirty", "true")
                     vm.core.session(acc.id)?.publishAvatar(bytes, mime)
                 }
             }
