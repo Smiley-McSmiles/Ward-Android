@@ -9,6 +9,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import org.ward.android.MainActivity
 import org.ward.android.R
 import org.ward.android.WardCore
@@ -25,7 +26,7 @@ class WardService : Service() {
         core = WardCore.get()
         createChannels()
         try {
-            startForeground(1, connectionNotification())
+            startForeground(FOREGROUND_ID, connectionNotification(0, 0))
         } catch (e: Exception) {
             // Android 12+ may refuse a foreground service start from a background restart.
             // Do not take the whole app down; the next foreground launch will reconnect.
@@ -39,6 +40,14 @@ class WardService : Service() {
                     core.connectAccount(a)
                 }
             }
+        }
+        scope.launch {
+            combine(core.dao.accounts(), core.states) { accounts, states -> accounts to states }
+                .collect { (accounts, states) ->
+                    val connected = accounts.count { states[it.id]?.state == "online" }
+                    getSystemService(NotificationManager::class.java)
+                        .notify(FOREGROUND_ID, connectionNotification(connected, accounts.size))
+                }
         }
     }
 
@@ -70,13 +79,18 @@ class WardService : Service() {
         }
     }
 
-    private fun connectionNotification(): Notification {
+    private fun connectionNotification(connected: Int, total: Int): Notification {
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val text = when {
+            total == 0 -> "Connecting…"
+            total == 1 -> "$connected of 1 account connected"
+            else -> "$connected of $total accounts connected"
+        }
         return NotificationCompat.Builder(this, "connection")
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Ward")
-            .setContentText("Connected in the background")
+            .setContentText(text)
             .setContentIntent(pi)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -115,7 +129,8 @@ class WardService : Service() {
     }
 
     companion object {
-        // Keep message notifications away from the foreground service notification id (1).
+        private const val FOREGROUND_ID = 1
+        // Keep message notifications away from the foreground service notification id.
         private const val MESSAGE_NOTIFICATION_BASE = 100_000
 
         fun start(context: Context) {
