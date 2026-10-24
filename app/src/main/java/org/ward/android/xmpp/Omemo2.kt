@@ -8,7 +8,10 @@ import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.Message
 import org.jivesoftware.smack.packet.StanzaBuilder
 import org.jivesoftware.smack.packet.XmlEnvironment
+import org.jivesoftware.smackx.pubsub.Item
+import org.jivesoftware.smackx.pubsub.ItemPublishEvent
 import org.jivesoftware.smackx.pubsub.PubSubManager
+import org.jivesoftware.smackx.pubsub.listener.ItemEventListener
 import org.jivesoftware.smackx.pubsub.packet.PubSub
 import org.jivesoftware.smackx.pubsub.packet.PubSubNamespace
 import org.ward.android.WardCore
@@ -86,7 +89,7 @@ class Omemo2(
         const val VERSION = 4
         private const val MIN_PRE_KEYS = 25
         private const val USED_PRE_KEYS_MAX = 100
-        private const val DEVICE_CACHE_MS = 5 * 60_000L
+        private const val DEVICE_CACHE_MS = 30_000L
         /**
          * Write an OMEMO 2 state file from keys parsed out of a Ward GTK device backup.
          * Session records are intentionally not carried across the two serialization formats;
@@ -234,6 +237,8 @@ class Omemo2(
 
     @Volatile private var published = false
     private var configured = false
+    @Volatile private var watchInstalled = false
+    private val watchedContactLists = mutableSetOf<String>()
     @Volatile var ready = false
         private set
 
@@ -502,6 +507,101 @@ class Omemo2(
         synchronized(lock) { signedPreKeys.remove(signedPreKeyId); disk.signedPreKeys.remove(signedPreKeyId.toString()); save() }
     }
 
+    /**
+     * The same account may be connected from GTK and several phones. Each client publishes one
+     * device-list item, and a client that merges an older list can accidentally drop this device.
+     * Watch our own node and republish if our device disappears.
+     */
+    fun watchOwnDeviceList() {
+        if (watchInstalled) return
+        watchInstalled = true
+        core.scope.launch {
+            runCatching {
+                val pm = PubSubManager.getInstanceFor(conn, conn.user.asBareJid())
+                val node = pm.getLeafNode(DEVICES)
+                node.addItemEventListener(object : ItemEventListener<Item> {
+                    override fun handlePublishedItems(event: ItemPublishEvent<Item>) {
+                        val ids = event.items.flatMap { item ->
+                            val xml = runCatching { item.toXML(XmlEnvironment.EMPTY).toString() }.getOrDefault("")
+                            val doc = parse(xml)
+                            val nodes = doc.getElementsByTagNameNS(NS, "device")
+                            (0 until nodes.length).mapNotNull { i ->
+                                (nodes.item(i) as? Element)?.getAttribute("id")?.toIntOrNull()
+                            }
+                        }.toSet()
+                        synchronized(lock) { deviceCache.remove(account.jid) }
+                        if (ids.isNotEmpty() && deviceId !in ids) {
+                            core.scope.launch {
+                                synchronized(lock) {
+                                    core.addXmlLog(account.id, false,
+                                        "OMEMO 2 device $deviceId was missing from our published list; republishing")
+                                    publish()
+                                }
+                            }
+                        }
+                    }
+                })
+            }.onFailure {
+                watchInstalled = false
+                core.addXmlLog(account.id, false, "OMEMO 2 device-list watch failed: ${it.message}")
+            }
+        }
+    }
+
+    private fun watchDeviceList(bareJid: String) {
+        if (bareJid == account.jid) {
+            watchOwnDeviceList()
+            return
+        }
+        synchronized(watchedContactLists) { if (!watchedContactLists.add(bareJid)) return }
+        core.scope.launch {
+            runCatching {
+                val pm = PubSubManager.getInstanceFor(conn, org.jxmpp.jid.impl.JidCreate.entityBareFrom(bareJid))
+                val node = pm.getLeafNode(DEVICES)
+                node.addItemEventListener(object : ItemEventListener<Item> {
+                    override fun handlePublishedItems(event: ItemPublishEvent<Item>) {
+                        val ids = event.items.flatMap { item ->
+                            val xml = runCatching { item.toXML(XmlEnvironment.EMPTY).toString() }.getOrDefault("")
+                            val doc = parse(xml)
+                            val nodes = doc.getElementsByTagNameNS(NS, "device")
+                            (0 until nodes.length).mapNotNull { i ->
+                                (nodes.item(i) as? Element)?.getAttribute("id")?.toIntOrNull()
+                            }
+                        }.distinct()
+                        if (ids.isNotEmpty()) {
+                            synchronized(lock) {
+                                deviceCache[bareJid] = CachedDevices(System.currentTimeMillis(), ids)
+                            }
+                        }
+                    }
+                })
+            }.onFailure {
+                synchronized(watchedContactLists) { watchedContactLists.remove(bareJid) }
+            }
+        }
+    }
+
+    fun invalidateDeviceCache(bareJid: String) {
+        synchronized(lock) {
+            deviceCache.remove(bareJid)
+            bundleCache.keys.removeIf { it.startsWith("$bareJid|") }
+        }
+    }
+
+    /** Periodic fallback for servers that do not deliver our own PEP update. */
+    fun ensureOwnDeviceListed() {
+        watchOwnDeviceList()
+        synchronized(lock) {
+            if (!conn.isConnected) return
+            val ids = fetchDevices(account.jid, force = true)
+            if (deviceId !in ids) {
+                core.addXmlLog(account.id, false,
+                    "OMEMO 2 device $deviceId missing from our published list; republishing")
+                publish()
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- PEP
     private fun pubsub(type: IQ.Type, child: String): IQ {
         val ps = PubSub(conn.user.asBareJid(), type, PubSubNamespace.basic)
@@ -545,7 +645,10 @@ class Omemo2(
                 val fetched = runCatching { fetchDevices(account.jid, true) }.getOrDefault(emptyList())
                 val known = if (fetched.isEmpty()) deviceCache[account.jid]?.devices ?: emptyList() else fetched
                 val stale = disk.staleDeviceId
-                ids = (known + deviceId).filter { it != stale && it !in disk.ignoredDevices }.distinct()
+                // Never let a stale marker or an old cleanup entry suppress the current device.
+                ids = (known + deviceId)
+                    .filter { (it != stale || it == deviceId) && (it !in disk.ignoredDevices || it == deviceId) }
+                    .distinct()
                 val devicesXml = "<publish node='$DEVICES'><item id='current'><devices xmlns='$NS'>" +
                     ids.joinToString("") { "<device id='$it'/>" } + "</devices></item></publish>"
 
@@ -574,7 +677,18 @@ class Omemo2(
                 }
                 if (!bundleOk) throw IllegalStateException("The OMEMO 2 bundle could not be published")
 
-                pubsub(IQ.Type.set, devicesXml + publishOptions("1"))
+                val devicesOk = try {
+                    pubsub(IQ.Type.set, devicesXml + publishOptions("1"))
+                    true
+                } catch (e: Exception) {
+                    core.addXmlLog(account.id, false,
+                        "OMEMO 2 device-list publish with options failed: ${e.message}; retrying after node configuration")
+                    runCatching { configureNode(DEVICES, "1") }
+                    runCatching { pubsub(IQ.Type.set, devicesXml + publishOptions("1")) }.isSuccess ||
+                        runCatching { pubsub(IQ.Type.set, devicesXml + publishOptions("1", includeMax = false)) }.isSuccess ||
+                        runCatching { pubsub(IQ.Type.set, devicesXml) }.isSuccess
+                }
+                if (!devicesOk) throw IllegalStateException("The OMEMO 2 device list could not be published")
                 deviceCache[account.jid] = CachedDevices(System.currentTimeMillis(), ids)
                 published = true
                 configured = true
@@ -637,6 +751,7 @@ class Omemo2(
     }
 
     private fun fetchDevices(bareJid: String, force: Boolean = false): List<Int> {
+        watchDeviceList(bareJid)
         val now = System.currentTimeMillis()
         if (!force) deviceCache[bareJid]?.let { if (now - it.at < DEVICE_CACHE_MS) return it.devices }
         return try {

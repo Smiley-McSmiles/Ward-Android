@@ -89,6 +89,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     @Volatile var omemoReady = false
         private set
     @Volatile var omemo2: Omemo2? = null
+    private var omemo2ListWatch: Job? = null
         private set
     var admin: AdminService? = null
         private set
@@ -124,6 +125,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     fun stop() {
         running = false
         online = false
+        omemo2ListWatch?.cancel()
+        omemo2ListWatch = null
         runCatching { call.finish() }
         runCatching { connection?.disconnect() }
         connection = null
@@ -634,6 +637,14 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             if (!published) {
                 core.addXmlLog(account.id, false, "OMEMO 2 first publish did not complete; retrying")
                 published = mgr.publish()
+            }
+            mgr.watchOwnDeviceList()
+            omemo2ListWatch?.cancel()
+            omemo2ListWatch = scope.launch {
+                while (running && online) {
+                    delay(30_000L)
+                    runCatching { omemo2?.ensureOwnDeviceListed() }
+                }
             }
             runBlocking(Dispatchers.IO) {
                 runCatching {
@@ -1722,6 +1733,15 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     }
                 }
             }
+        }
+    }
+
+    fun refreshOmemoDevices(jid: String) {
+        val o2 = omemo2 ?: return
+        o2.invalidateDeviceCache(jid)
+        scope.launch(Dispatchers.IO) {
+            runCatching { o2.ensureOwnDeviceListed() }
+            runCatching { o2.loadDeviceInfo(jid) }
         }
     }
 

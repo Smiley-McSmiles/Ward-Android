@@ -251,7 +251,12 @@ class WardCore private constructor(val context: Context) {
     }
     suspend fun setMuted(chat: ChatEntity, until: Long) = dao.updateChat(chat.copy(mutedUntil = until))
     suspend fun setArchived(chat: ChatEntity, archived: Boolean) = dao.updateChat(chat.copy(archived = archived))
-    suspend fun setEncryption(chat: ChatEntity, encryption: String) = dao.updateChat(chat.copy(encryption = encryption))
+    suspend fun setEncryption(chat: ChatEntity, encryption: String) {
+        dao.updateChat(chat.copy(encryption = encryption))
+        // A mode switch is a good moment to discard a stale OMEMO device list so both the
+        // contact's current devices and our own published device are picked up.
+        sessions[chat.accountId]?.refreshOmemoDevices(chat.jid)
+    }
     suspend fun setNotify(chat: ChatEntity, notify: String) = dao.updateChat(chat.copy(notify = notify))
     suspend fun clearHistory(chat: ChatEntity) {
         dao.clearMessages(chat.id)
