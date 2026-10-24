@@ -422,35 +422,81 @@ fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: (
     var accountId by remember(initialAccountId, accounts.map { it.id }) {
         mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("New chat") }, text = {
-        Column {
+    val valid = JidUtil.valid(JidUtil.bare(jid)) && accountId != 0L
+    val shownContacts = contacts
+        .filter { it.inRoster && (accountId == 0L || it.accountId == accountId) }
+        .sortedWith(compareBy({ it.presence == "offline" }, { it.name.lowercase() }))
+
+    ModalBottomSheet(onDismissRequest = onDismiss, dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Text("New chat", style = MaterialTheme.typography.headlineSmall)
+            Text("Start a conversation with an XMPP address or a contact.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (accounts.size > 1) {
-                Text("Account", style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id },
-                        label = { Text(a.displayName) }) }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (a in accounts) {
+                        FilterChip(selected = accountId == a.id, onClick = { accountId = a.id },
+                            label = { Text(a.displayName) },
+                            leadingIcon = if (accountId == a.id) ({ Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }) else null)
+                    }
                 }
-                Spacer(Modifier.height(10.dp))
             }
-            OutlinedTextField(jid, { jid = it }, label = { Text("Address, like alex@example.org") }, singleLine = true,
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(jid, { jid = it }, placeholder = { Text("alex@example.org") },
+                leadingIcon = { Icon(Icons.Filled.AlternateEmail, null) },
+                trailingIcon = {
+                    if (jid.isNotBlank()) IconButton(onClick = { jid = "" }) { Icon(Icons.Filled.Close, "Clear") }
+                },
+                singleLine = true, shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth())
+            if (jid.isNotBlank() && !valid) {
+                Text("Enter a full address, like name@example.org",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+            }
             JidSuggestions(jid, accountId, accounts) { jid = it }
-            Spacer(Modifier.height(10.dp))
-            Text("Contacts", style = MaterialTheme.typography.labelMedium)
-            LazyColumn(Modifier.heightIn(max = 240.dp)) {
-                items(contacts.filter { it.inRoster && (accountId == 0L || it.accountId == accountId) }.take(20)) { c ->
-                    ListItem(headlineContent = { Text(c.name) }, supportingContent = { Text(c.jid) },
-                        leadingContent = { Avatar(c.name, 34, photo = c.avatar, show = c.presence) },
-                        modifier = Modifier.clickable { jid = c.jid })
+            Spacer(Modifier.height(16.dp))
+            Text("Contacts", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(6.dp))
+            if (shownContacts.isEmpty()) {
+                Text("No contacts yet", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 12.dp))
+            } else {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(shownContacts.take(50), key = { it.accountId.toString() + it.jid }) { c ->
+                        Surface(onClick = { jid = c.jid }, shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Avatar(c.name, 38, photo = c.avatar, show = c.presence)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(c.jid, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis)
+                                }
+                                if (jid == c.jid) Icon(Icons.Filled.Check, "Selected",
+                                    tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
                 }
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                Button(enabled = valid, onClick = {
+                    vm.openChat(accountId, JidUtil.bare(jid))
+                    onDismiss()
+                }, modifier = Modifier.weight(1f)) { Text("Start chat") }
             }
         }
-    }, confirmButton = {
-        TextButton(onClick = {
-            val j = JidUtil.bare(jid)
-            if (JidUtil.valid(j) && accountId != 0L) { vm.openChat(accountId, j); onDismiss() }
-        }) { Text("Chat") }
-    }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    }
 }
 
 @Composable
