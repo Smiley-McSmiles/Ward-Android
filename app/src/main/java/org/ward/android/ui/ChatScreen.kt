@@ -361,7 +361,6 @@ fun encryptionLabel(c: ChatEntity): String = when (c.encryption) {
     "off" -> "Not encrypted"
     "pgp" -> "Encrypted with OpenPGP"
     "omemo2" -> "Encrypted with OMEMO 2"
-    "omemo" -> "Encrypted with legacy OMEMO"
     else -> "Encrypted with OMEMO"
 }
 
@@ -628,7 +627,7 @@ fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?
     var inviteOpen by remember { mutableStateOf(false) }
     var inviteJid by remember { mutableStateOf("") }
     var notify by remember { mutableStateOf(chat.notify) }
-    var encryption by remember { mutableStateOf(chat.encryption) }
+    var encryption by remember { mutableStateOf(if (chat.encryption == "omemo") "default" else chat.encryption) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -664,12 +663,10 @@ fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?
             }
             val legacyEnabled = vm.settings.bool("encryption.legacy_omemo")
             val choices = if (chat.isGroup) {
-                listOf("default" to "Default", "omemo" to "Legacy OMEMO", "off" to "Off")
-                    .filter { it.first != "omemo" || legacyEnabled }
+                listOf("default" to "Default (OMEMO)", "off" to "Off")
             } else {
-                (listOf("default" to "Default", "omemo2" to "OMEMO 2", "omemo" to "Legacy OMEMO", "off" to "Off") +
-                    if (vm.settings.bool("pgp.enabled")) listOf("pgp" to "OpenPGP") else emptyList())
-                    .filter { it.first != "omemo" || legacyEnabled }
+                listOf("default" to "Default (OMEMO)", "omemo2" to "OMEMO 2", "off" to "Off") +
+                    if (vm.settings.bool("pgp.enabled")) listOf("pgp" to "OpenPGP") else emptyList()
             }
             Text("Encryption", style = MaterialTheme.typography.labelLarge)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -678,17 +675,17 @@ fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?
                 }
             }
             if (chat.isGroup) {
-                Text("Groups use legacy OMEMO when available. OMEMO 2 group encryption is not implemented yet.",
+                Text("Default (OMEMO) uses legacy OMEMO for groups. OMEMO 2 group encryption is not implemented yet.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!legacyEnabled && encryption != "off") {
-                    Text("Legacy OMEMO is turned off in Settings → Encryption. Choose Off or enable legacy OMEMO.",
+                    Text("OMEMO (legacy) is turned off in Settings → Encryption. Choose Off or enable it.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
-            } else if (encryption == "omemo" && !legacyEnabled) {
-                Text("Legacy OMEMO is turned off in Settings → Encryption. Choose Default or enable legacy OMEMO.",
+            } else if (!legacyEnabled && encryption == "default") {
+                Text("Default (OMEMO) needs legacy OMEMO. Choose OMEMO 2 or Off, or enable legacy OMEMO in Settings → Encryption.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             } else {
-                Text("Default uses OMEMO 2 when the contact supports it, then falls back to legacy OMEMO.",
+                Text("Default uses OMEMO (legacy) for compatibility. Choose OMEMO 2 for contacts that support it.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(12.dp))

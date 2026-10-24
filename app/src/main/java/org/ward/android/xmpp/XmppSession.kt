@@ -1383,28 +1383,26 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }
         val effective = core.effectiveEncryption(chat, account)
         if (effective != "omemo") return null
-        val force2 = chat.encryption == "omemo2"
-        val forceLegacy = chat.encryption == "omemo"
-        if (force2 && chat.isGroup)
-            throw IllegalStateException("OMEMO 2 group chats are not supported yet. Choose Legacy OMEMO for this group.")
-        if (!chat.isGroup && !forceLegacy && (force2 || core.settings.string("encryption.omemo2", "true").toBoolean())) {
-            val o2 = omemo2
-            if (o2 != null) {
-                val content = buildSceContent(chat, entity)
-                val xml = try { o2.encryptContent(chat.jid, content) } catch (e: Exception) {
-                    core.addXmlLog(account.id, false, "OMEMO 2 encrypt failed: ${e.message}"); null
-                }
-                if (xml != null) return EncryptedPayload.Omemo2(xml)
-            }
-            if (force2) throw IllegalStateException(
-                "This contact has no OMEMO 2 devices. Ask them to enable OMEMO 2, or choose Legacy OMEMO in Details.")
+        // Default is OMEMO (legacy). OMEMO 2 is used only when this chat explicitly selects it:
+        // never sneak it in under "Default", and never silently fall back to legacy when the
+        // user asked for OMEMO 2.
+        if (chat.encryption == "omemo2") {
+            if (chat.isGroup)
+                throw IllegalStateException("OMEMO 2 group chats are not supported yet. Choose Default (OMEMO) for this group.")
+            val o2 = omemo2 ?: throw IllegalStateException("OMEMO 2 is not ready on this device yet. Try again in a moment.")
+            val content = buildSceContent(chat, entity)
+            val xml = try { o2.encryptContent(chat.jid, content) } catch (e: Exception) {
+                core.addXmlLog(account.id, false, "OMEMO 2 encrypt failed: ${e.message}"); null
+            } ?: throw IllegalStateException(
+                "This contact has no OMEMO 2 devices. Ask them to enable OMEMO 2, or choose Default (OMEMO) in Details.")
+            return EncryptedPayload.Omemo2(xml)
         }
         if (!core.settings.bool("encryption.legacy_omemo")) {
-            throw IllegalStateException("Legacy OMEMO is turned off in Settings → Encryption")
+            throw IllegalStateException("OMEMO (legacy) is turned off in Settings → Encryption")
         }
         val mgr = ensureLegacyManager()
-            ?: throw IllegalStateException("Legacy OMEMO is not ready on this device yet. Try again in a moment.")
-        if (!omemoReady) throw IllegalStateException("Legacy OMEMO is still starting. Try again in a moment.")
+            ?: throw IllegalStateException("OMEMO is not ready on this device yet. Try again in a moment.")
+        if (!omemoReady) throw IllegalStateException("OMEMO is still starting. Try again in a moment.")
         return try {
             if (chat.isGroup) {
                 val muc = rooms[chat.jid] ?: throw IllegalStateException("Not in the group yet")
@@ -1478,9 +1476,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     /** Sends an OMEMO 2 encrypted extension-only message (reactions, edits, retractions). */
     private fun sendEncrypted2Content(chat: ChatEntity, contentXml: String): Boolean {
         if (chat.isGroup) return false
-        if (chat.encryption == "off" || chat.encryption == "pgp") return false
-        if (chat.encryption == "omemo") return false
-        if (chat.encryption != "omemo2" && !core.settings.string("encryption.omemo2", "true").toBoolean()) return false
+        // Extensions encrypted with OMEMO 2 belong only to chats that explicitly use OMEMO 2.
+        if (chat.encryption != "omemo2") return false
         val o2 = omemo2 ?: return false
         val conn = connection ?: return false
         val xml = runCatching { o2.encryptContent(chat.jid, contentXml) }.getOrNull() ?: return false

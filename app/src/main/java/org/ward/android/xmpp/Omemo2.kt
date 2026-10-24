@@ -759,28 +759,38 @@ class Omemo2(
             var items: List<org.jivesoftware.smackx.pubsub.Item> = node.getItems(listOf("current"))
             if (items.isEmpty()) items = node.getItems()
             val item = items.firstOrNull { it.id == "current" } ?: items.firstOrNull()
-            val xml = item?.toXML(XmlEnvironment.EMPTY)?.toString() ?: ""
+                ?: return fallbackDevices(bareJid, "the device list has no item")
+            val xml = item.toXML(XmlEnvironment.EMPTY)?.toString() ?: ""
             val doc = parse(xml)
             val listed = doc.getElementsByTagNameNS(NS, "device").let { nl ->
                 (0 until nl.length).mapNotNull { (nl.item(it) as? Element)?.getAttribute("id")?.toIntOrNull() }
-            }
-            // Ward (and some older clients) can have a stale OMEMO 2 device list that omits the
-            // device whose bundle is actually published. Bundle items are authoritative enough for
-            // us to start a session with a contact, so merge their item ids into the contact's
-            // list. Never merge bundle ids into our own list: that would re-advertise a device that
-            // was deliberately removed while its old bundle item still exists.
-            val bundled = if (bareJid == account.jid) emptyList() else runCatching {
-                val bundleNode = PubSubManager.getInstanceFor(conn,
-                    org.jxmpp.jid.impl.JidCreate.entityBareFrom(bareJid)).getLeafNode(BUNDLES)
-                val bundleItems: List<org.jivesoftware.smackx.pubsub.Item> = bundleNode.getItems()
-                bundleItems.mapNotNull { it.id?.toIntOrNull() }
-            }.getOrDefault(emptyList())
-            val list = (listed + bundled).distinct()
-            deviceCache[bareJid] = CachedDevices(now, list)
-            list
+            }.distinct()
+            // A readable device list is authoritative: never add devices that only have a bundle
+            // item. Ward (and some older clients) can leave bundle items behind after a device was
+            // removed, and encrypting for those devices wastes keys and hides a stale list. Bundle
+            // ids are only a fallback when there is no readable list at all.
+            deviceCache[bareJid] = CachedDevices(now, listed)
+            listed
         } catch (e: Exception) {
-            deviceCache[bareJid]?.devices ?: emptyList()
+            fallbackDevices(bareJid, e.message ?: e.javaClass.simpleName)
         }
+    }
+
+    /**
+     * The device list as a last resort: when it is missing or cannot be read, use the ids of the
+     * published bundles. Never do this for our own account: that would re-advertise a device that
+     * was deliberately removed while its old bundle item still exists.
+     */
+    private fun fallbackDevices(bareJid: String, reason: String): List<Int> {
+        if (bareJid == account.jid) return deviceCache[bareJid]?.devices ?: emptyList()
+        core.addXmlLog(account.id, false, "OMEMO 2 device list for $bareJid unavailable ($reason); using bundle ids")
+        val bundled = runCatching {
+            val bundleNode = PubSubManager.getInstanceFor(conn,
+                org.jxmpp.jid.impl.JidCreate.entityBareFrom(bareJid)).getLeafNode(BUNDLES)
+            val bundleItems: List<org.jivesoftware.smackx.pubsub.Item> = bundleNode.getItems()
+            bundleItems.mapNotNull { it.id?.toIntOrNull() }.distinct()
+        }.getOrDefault(emptyList())
+        return bundled.ifEmpty { deviceCache[bareJid]?.devices ?: emptyList() }
     }
 
     private fun fetchBundle(bareJid: String, devId: Int): PreKeyBundle? {
