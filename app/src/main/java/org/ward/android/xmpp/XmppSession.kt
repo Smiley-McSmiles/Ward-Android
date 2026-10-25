@@ -1386,7 +1386,14 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 is EncryptedPayload.Pgp -> "pgp"; null -> ""
             }))
         } catch (e: Exception) {
-            core.dao.updateMessage(entity.copy(status = -1, error = friendlyError(e)))
+            val message = (e.message ?: "").lowercase()
+            val connectionLost = !online || connection?.isConnected != true ||
+                message.contains("not connected") || message.contains("no longer connected") ||
+                e is org.jivesoftware.smack.SmackException.NotConnectedException
+            // Keep queued messages queued if the connection vanished between the online check
+            // and the send. flushOutbox() retries them on the next connection.
+            core.dao.updateMessage(if (connectionLost) entity.copy(status = 0)
+                else entity.copy(status = -1, error = friendlyError(e)))
         }
     }
 
