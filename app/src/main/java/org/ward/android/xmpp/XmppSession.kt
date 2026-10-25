@@ -1040,6 +1040,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         scope.launch {
             try {
                 val conn = connection ?: throw IllegalStateException("Not connected")
+                if (!chat.jid.contains('@')) {
+                    throw IllegalStateException("That is the group service address, not a room. Use room@conference.${account.domain}")
+                }
                 val mgr = MultiUserChatManager.getInstanceFor(conn)
                 val roomJid = JidCreate.entityBareFrom(chat.jid)
                 val muc = rooms[chat.jid] ?: mgr.getMultiUserChat(roomJid).also { rooms[chat.jid] = it; setupMuc(it, chat) }
@@ -1222,6 +1225,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         scope.launch {
             try {
                 val conn = connection ?: throw IllegalStateException("Not connected")
+                if (!chat.jid.contains('@')) {
+                    throw IllegalStateException("That is the group service address, not a room. Use room@conference.${account.domain}")
+                }
                 val mgr = MultiUserChatManager.getInstanceFor(conn)
                 val muc = mgr.getMultiUserChat(JidCreate.entityBareFrom(chat.jid))
                 if (!muc.isJoined) muc.createOrJoin(Resourcepart.from(chat.ourNick.ifBlank { account.nickname.ifBlank { account.localpart } }))
@@ -1264,6 +1270,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         runCatching {
             val bm = BookmarkManager.getBookmarkManager(conn)
             for (conf in bm.bookmarkedConferences) {
+                if (conf.jid.localpartOrNull == null) {
+                    core.addXmlLog(account.id, false, "Skipping invalid group bookmark ${conf.jid}: no room name")
+                    continue
+                }
                 scope.launch {
                     val chat = core.ensureChat(account.id, conf.jid.toString(), "groupchat",
                         conf.name ?: conf.jid.toString().substringBefore('@'))

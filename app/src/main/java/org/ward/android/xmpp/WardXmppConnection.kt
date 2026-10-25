@@ -26,6 +26,10 @@ class WardXmppConnection(
             onMalformedStanza("Ignored malformed incoming stanza: ${e.message ?: "NullPointerException"}" +
                 if (raw.isNullOrBlank()) "" else "\n$raw")
             runCatching { ParserUtils.forwardToEndTagOfDepth(parser, depth) }
+        } catch (e: org.jxmpp.stringprep.XmppStringprepException) {
+            // A bad JID in one stanza must not tear down the whole connection.
+            onMalformedStanza("Ignored stanza with an invalid JID: ${e.message}")
+            runCatching { ParserUtils.forwardToEndTagOfDepth(parser, depth) }
         }
     }
 }
