@@ -43,6 +43,7 @@ class WardCore private constructor(val context: Context) {
     private val _unread = MutableStateFlow(0)
     val unread: StateFlow<Int> = _unread
     var notificationSink: ((MessageEntity, ChatEntity, AccountEntity) -> Unit)? = null
+    var notificationDismissSink: ((Long) -> Unit)? = null
     var accountList: List<AccountEntity> = emptyList()
 
     init {
@@ -264,6 +265,7 @@ class WardCore private constructor(val context: Context) {
 
     suspend fun markRead(chat: ChatEntity) {
         if (!isChatActive(chat.id)) return
+        notificationDismissSink?.invoke(chat.id)
         val msgs = dao.messagesNow(chat.id, 500)
         val lastIn = msgs.lastOrNull { it.direction == 0 }
         val updated = chat.copy(unread = 0, mentions = 0, lastReadId = lastIn?.id ?: chat.lastReadId)

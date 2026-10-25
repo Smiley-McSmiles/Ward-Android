@@ -34,6 +34,10 @@ class WardService : Service() {
             return
         }
         core.notificationSink = { msg, chat, acc -> notifyMessage(msg, chat, acc) }
+        core.notificationDismissSink = { chatId ->
+            getSystemService(NotificationManager::class.java)
+                .cancel(MESSAGE_NOTIFICATION_BASE + chatId.toInt())
+        }
         scope.launch {
             core.dao.accounts().collect { accounts ->
                 for (a in accounts) if (a.enabled && core.session(a.id) == null && core.passwordOf(a).isNotBlank()) {
@@ -61,6 +65,7 @@ class WardService : Service() {
 
     override fun onDestroy() {
         core.notificationSink = null
+        core.notificationDismissSink = null
         scope.cancel()
         super.onDestroy()
     }
