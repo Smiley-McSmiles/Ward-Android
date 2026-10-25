@@ -26,6 +26,7 @@ object AppLockStore {
     private const val KEY_MAX_ATTEMPTS = "max_attempts"
     private const val KEY_LOCKOUT_SECONDS = "lockout_seconds"
     private const val KEY_LOCK_DELAY_SECONDS = "lock_delay_seconds"
+    private const val KEY_BACKGROUND_AT = "background_at"
     private const val KEY_FAILED = "failed_attempts"
     private const val KEY_LOCKOUT_UNTIL = "lockout_until"
     private const val ITERATIONS = 120_000
@@ -78,6 +79,15 @@ object AppLockStore {
         prefs(context).getInt(KEY_LOCK_DELAY_SECONDS, 0).coerceIn(0, 3_600)
     fun setLockDelaySeconds(context: Context, value: Int) {
         prefs(context).edit().putInt(KEY_LOCK_DELAY_SECONDS, value.coerceIn(0, 3_600)).apply()
+    }
+
+    /** Elapsed-realtime timestamp when Ward last went to the background. Survives recreation. */
+    fun backgroundAt(context: Context): Long = prefs(context).getLong(KEY_BACKGROUND_AT, 0L)
+    fun setBackgroundAt(context: Context, value: Long) {
+        prefs(context).edit().putLong(KEY_BACKGROUND_AT, value).apply()
+    }
+    fun clearBackgroundAt(context: Context) {
+        prefs(context).edit().remove(KEY_BACKGROUND_AT).apply()
     }
 
     data class Failure(val attempts: Int, val wipe: Boolean, val lockoutUntil: Long)

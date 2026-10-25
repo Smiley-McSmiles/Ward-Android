@@ -71,7 +71,7 @@ class AdminService(private val connection: XMPPConnection, private val domain: S
         return list
     }
 
-    fun offers(node: String): Boolean = listCommands().any { it.node == node }
+    fun offers(node: String): Boolean = runCatching { listCommands().any { it.node == node } }.getOrDefault(false)
 
     fun execute(jid: String = domain, node: String): AdminStep {
         val cmd = AdHocCommandData()
@@ -186,8 +186,14 @@ class AdminService(private val connection: XMPPConnection, private val domain: S
     }
 
     fun users(): Pair<List<String>, String> {
-        if (offers(AdminNodes.of("get-registered-users-list"))) return userList(AdminNodes.of("get-registered-users-list")) to "registered"
-        if (offers(AdminNodes.of("get-online-users-list"))) return userList(AdminNodes.of("get-online-users-list")) to "online"
+        if (offers(AdminNodes.of("get-registered-users-list"))) {
+            val registered = runCatching { userList(AdminNodes.of("get-registered-users-list")) }.getOrNull()
+            if (registered != null) return registered to "registered"
+        }
+        if (offers(AdminNodes.of("get-online-users-list"))) {
+            val online = runCatching { userList(AdminNodes.of("get-online-users-list")) }.getOrNull()
+            if (online != null) return online to "online"
+        }
         return emptyList<String>() to ""
     }
 
@@ -205,14 +211,26 @@ class AdminService(private val connection: XMPPConnection, private val domain: S
     }
 
     fun createInvite(contactInvite: Boolean = false): String {
-        val key = if (contactInvite) "invite" else "create-account"
-        var step = execute(node = AdminNodes.of(key))
-        if (!step.finished && step.fields.isNotEmpty()) step = advance(step, "complete", emptyMap())
-        step.fields.firstOrNull { it.varName in listOf("landing-url", "uri", "url") && it.values.isNotEmpty() }?.let {
-            return it.values.first()
+        val preferred = if (contactInvite) listOf("invite", "create-account") else listOf("create-account", "invite")
+        val nodes = (preferred.map { AdminNodes.of(it) } +
+            runCatching { listCommands().filter {
+                it.node.contains("invite", true) || it.name.contains("invite", true)
+            }.map { it.node } }.getOrDefault(emptyList())).distinct()
+        for (node in nodes) {
+            val step = runCatching {
+                var value = execute(node = node)
+                if (!value.finished && value.fields.isNotEmpty()) value = advance(value, "complete", emptyMap())
+                value
+            }.getOrNull() ?: continue
+            step.fields.firstOrNull { it.varName in listOf("landing-url", "uri", "url") && it.values.isNotEmpty() }?.let {
+                return it.values.first()
+            }
+            step.fields.asSequence().flatMap { it.values.asSequence() }
+                .firstOrNull { it.trim().startsWith("https://") || it.trim().startsWith("xmpp:") }
+                ?.let { return it.trim() }
+            step.notes.firstOrNull { it.text.contains("xmpp:") || it.text.contains("https://") }?.let { return it.text.trim() }
         }
-        step.notes.firstOrNull { it.text.contains("xmpp:") || it.text.contains("https://") }?.let { return it.text.trim() }
-        throw IllegalStateException("the server did not return an invite")
+        throw IllegalStateException("This server does not provide invite links.")
     }
 
     fun cancel(step: AdminStep) {

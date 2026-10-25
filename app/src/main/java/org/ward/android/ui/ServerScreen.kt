@@ -74,7 +74,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                 stats = svc.stats()
                 users = svc.users()
             }
-        } catch (e: Exception) { error = e.message ?: "Could not load server information" }
+        } catch (e: Exception) { error = adminError(e) }
         loading = false
     }
     LaunchedEffect(accountId, refresh, states[accountId]?.state) {
@@ -145,7 +145,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                             try {
                                 val link = withContext(Dispatchers.IO) { session?.admin?.createInvite(false) ?: "" }
                                 if (link.isNotBlank()) invite = link
-                            } catch (e: Exception) { error = e.message ?: "Could not create an invite" }
+                            } catch (e: Exception) { error = adminError(e) }
                         }
                     }) { Icon(Icons.Filled.AddLink, null); Spacer(Modifier.width(4.dp)); Text("Create account invite") }
                 }
@@ -193,6 +193,24 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
     }
 }
 
+private fun adminError(e: Throwable): String {
+    val raw = e.message.orEmpty()
+    return when {
+        raw.contains("no longer connected", true) || e is org.jivesoftware.smack.SmackException.NotConnectedException ->
+            "The connection dropped while loading server information. Reconnect and try again."
+        raw.contains("service-unavailable", true) ->
+            "This server does not provide that administration feature."
+        raw.contains("No response", true) || e is org.jivesoftware.smack.SmackException.NoResponseException ->
+            "The server did not answer the administration request. Try again."
+        e is org.jivesoftware.smack.XMPPException.XMPPErrorException -> {
+            val condition = runCatching { e.stanzaError.condition.toString() }.getOrNull().orEmpty()
+            "The server rejected the administration request" + if (condition.isBlank()) "." else " ($condition)."
+        }
+        raw.isBlank() -> "The server administration request failed."
+        else -> raw.lineSequence().firstOrNull()?.take(220) ?: "The server administration request failed."
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand, onBack: () -> Unit) {
@@ -210,7 +228,7 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
     LaunchedEffect(command) {
         busy = true
         try { withContext(Dispatchers.IO) { apply(svc?.execute(command.jid, command.node) ?: error("Not connected")) } }
-        catch (e: Exception) { error = e.message ?: "The command failed" }
+        catch (e: Exception) { error = adminError(e) }
         busy = false
     }
     Scaffold(topBar = { TopAppBar(title = { Text(command.name) }, navigationIcon = {
@@ -267,7 +285,7 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
                             scope.launch {
                                 busy = true; error = ""
                                 try { withContext(Dispatchers.IO) { apply(svc!!.advance(s, act, values)) } }
-                                catch (e: Exception) { error = e.message ?: "The command failed" }
+                                catch (e: Exception) { error = adminError(e) }
                                 busy = false
                             }
                         }, enabled = !busy) {

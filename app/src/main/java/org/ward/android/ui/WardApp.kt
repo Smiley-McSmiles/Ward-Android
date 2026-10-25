@@ -20,9 +20,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.ward.android.WardCore
 import org.ward.android.service.WardService
 import org.ward.android.util.AppLockStore
@@ -31,38 +28,36 @@ import org.ward.android.util.AppLockStore
 fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? = null) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
     var unlocked by remember {
-        mutableStateOf(!AppLockStore.isEnabled(context) || AppLockStore.externalActivityActive())
+        val enabled = AppLockStore.isEnabled(context)
+        val backgroundAt = AppLockStore.backgroundAt(context)
+        val now = android.os.SystemClock.elapsedRealtime()
+        val delayMs = AppLockStore.lockDelaySeconds(context) * 1_000L
+        val stillWithinDelay = delayMs > 0 && backgroundAt > 0 && now >= backgroundAt && now - backgroundAt < delayMs
+        mutableStateOf(!enabled || AppLockStore.externalActivityActive() || stillWithinDelay)
     }
-    var lockJob by remember { mutableStateOf<Job?>(null) }
     val currentlyUnlocked by rememberUpdatedState(unlocked)
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> {
-                    lockJob?.cancel()
-                    lockJob = null
-                    vm.core.setAppForeground(currentlyUnlocked)
+                    val backgroundAt = AppLockStore.backgroundAt(context)
+                    AppLockStore.clearBackgroundAt(context)
+                    if (currentlyUnlocked && backgroundAt > 0L && AppLockStore.isEnabled(context) &&
+                        !AppLockStore.externalActivityActive()) {
+                        val delayMs = AppLockStore.lockDelaySeconds(context) * 1_000L
+                        val elapsed = android.os.SystemClock.elapsedRealtime() - backgroundAt
+                        if (delayMs <= 0L || elapsed >= delayMs) unlocked = false
+                    }
+                    vm.core.setAppForeground(unlocked)
                 }
                 Lifecycle.Event.ON_STOP -> {
                     vm.core.setAppForeground(false)
                     if (AppLockStore.isEnabled(context) && !AppLockStore.externalActivityActive() && currentlyUnlocked) {
-                        val delaySeconds = AppLockStore.lockDelaySeconds(context)
-                        if (delaySeconds <= 0) {
-                            unlocked = false
-                        } else {
-                            lockJob?.cancel()
-                            lockJob = scope.launch {
-                                delay(delaySeconds * 1_000L)
-                                unlocked = false
-                            }
-                        }
+                        AppLockStore.setBackgroundAt(context, android.os.SystemClock.elapsedRealtime())
                     }
                 }
                 Lifecycle.Event.ON_DESTROY -> {
-                    lockJob?.cancel()
-                    lockJob = null
                     vm.core.setAppForeground(false)
                 }
                 else -> {}
@@ -70,8 +65,6 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            lockJob?.cancel()
-            lockJob = null
             lifecycleOwner.lifecycle.removeObserver(observer)
             vm.core.setAppForeground(false)
         }
