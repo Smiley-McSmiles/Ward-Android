@@ -15,7 +15,10 @@ import org.jivesoftware.smack.roster.RosterEntry
 import org.jivesoftware.smack.roster.RosterListener
 import org.jivesoftware.smack.roster.SubscribeListener
 import org.jivesoftware.smack.util.PacketParserUtils
-import org.jivesoftware.smackx.bookmarks.BookmarkManager
+import org.jivesoftware.smack.xml.XmlPullParser
+import org.jivesoftware.smackx.iqprivate.PrivateDataManager
+import org.jivesoftware.smackx.iqprivate.packet.PrivateData
+import org.jivesoftware.smackx.iqprivate.provider.PrivateDataProvider
 import org.jivesoftware.smackx.carbons.CarbonCopyReceivedListener
 import org.jivesoftware.smackx.carbons.CarbonManager
 import org.jivesoftware.smackx.carbons.packet.CarbonExtension
@@ -71,6 +74,18 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 private const val AVATAR_META_NS = "urn:xmpp:avatar:metadata"
+private const val BOOKMARK_NS = "storage:bookmarks"
+
+private object rawBookmarkProvider : PrivateDataProvider {
+    override fun parsePrivateData(parser: XmlPullParser): PrivateData =
+        RawPrivateData(PacketParserUtils.parseElement(parser, true).toString())
+}
+
+private class RawPrivateData(private val raw: String) : PrivateData {
+    override fun getElementName() = "storage"
+    override fun getNamespace() = BOOKMARK_NS
+    override fun toXML(): CharSequence = raw
+}
 private const val AVATAR_DATA_NS = "urn:xmpp:avatar:data"
 
 data class OccupantInfo(val nick: String, val jid: String, val role: String, val affiliation: String,
@@ -224,7 +239,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             }
             override fun connectionClosedOnError(e: Exception) {
                 online = false
-                core.addXmlLog(account.id, false, "connection error: ${e.message}")
+                core.addXmlLog(account.id, false, "connection error: ${e.message}\n${e.stackTraceToString()}")
             }
         })
         core.onState(account.id, ConnectionState("connecting", "Securing the connection…"))
@@ -412,6 +427,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     private fun setupMessageListeners(conn: XMPPConnection) {
         conn.addAsyncStanzaListener({ stanza ->
+            try {
             if (stanza is Message) {
                 core.addXmlLog(account.id, true, stanza.toXML(XmlEnvironment.EMPTY).toString())
                 if (stanza.type != Message.Type.groupchat) {
@@ -442,6 +458,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     } else if (!enc) processMessage(stanza, directionOverride = null)
                 }
             }
+            } catch (e: Exception) {
+                core.addXmlLog(account.id, true, "message listener error: ${e.stackTraceToString()}")
+            }
         }, null)
         // Jingle IQs are requests: Smack delivers those only to an IQ request handler, never to
         // stanza listeners. The raw provider also avoids Smack's built-in Jingle parser closing
@@ -454,6 +473,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             CarbonManager.getInstanceFor(conn).addCarbonCopyReceivedListener(object : CarbonCopyReceivedListener {
                 // Smack passes the copied message first and the <message> that carried it second.
                 override fun onCarbonCopyReceived(direction: CarbonExtension.Direction, carbonCopy: Message, wrappingMessage: Message) {
+                    try {
                     if (carbonCopy.type == Message.Type.groupchat) return
                     val dir = if (direction == CarbonExtension.Direction.sent) 1 else 0
                     val raw = carbonCopy.toXML(XmlEnvironment.EMPTY).toString()
@@ -464,6 +484,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                         carbonCopy.getExtensionElement("encrypted", Ns.OMEMO) != null -> Unit
                         carbonCopy.ext("openpgp", Ns.OPENPGP) != null -> if (dir == 0) scope.launch { processPgp(carbonCopy) }
                         else -> processMessage(carbonCopy, directionOverride = dir)
+                    }
+                    } catch (e: Exception) {
+                        core.addXmlLog(account.id, true, "carbon listener error: ${e.stackTraceToString()}")
                     }
                 }
             })
@@ -1256,31 +1279,90 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     private fun saveAutojoin(chat: ChatEntity) {
         val conn = connection ?: return
-        val bm = BookmarkManager.getBookmarkManager(conn)
+        if (!chat.jid.contains('@')) return
         runCatching {
-            val existing = bm.bookmarkedConferences.firstOrNull { it.jid.toString() == chat.jid }
-            if (existing == null) bm.addBookmarkedConference(chat.displayName, JidCreate.entityBareFrom(chat.jid),
-                true, Resourcepart.from(chat.ourNick.ifBlank { account.localpart }), "")
-            else bm.addBookmarkedConference(existing.name, existing.jid, true, existing.nickname, existing.password)
+            val raw = rawBookmarks(conn) ?: "<storage xmlns='storage:bookmarks'/>"
+            val doc = parseXml(raw)
+            val root = doc.documentElement ?: return@runCatching
+            val conferences = root.getElementsByTagNameNS(BOOKMARK_NS, "conference")
+            val exists = (0 until conferences.length).any {
+                (conferences.item(it) as? org.w3c.dom.Element)?.getAttribute("jid") == chat.jid
+            }
+            if (exists) return@runCatching
+            val c = doc.createElementNS(BOOKMARK_NS, "conference")
+            c.setAttribute("jid", chat.jid)
+            c.setAttribute("name", chat.displayName)
+            c.setAttribute("autojoin", "true")
+            val nick = doc.createElementNS(BOOKMARK_NS, "nick")
+            nick.textContent = chat.ourNick.ifBlank { account.localpart }
+            c.appendChild(nick)
+            root.appendChild(c)
+            writeBookmarks(conn, serializeXml(doc))
         }
     }
 
+    /**
+     * Read and repair the private bookmark storage without Smack's BookmarkManager. That manager
+     * requires an EntityBareJid for every bookmark; a stale bookmark such as
+     * "conference.example.org" (no room localpart) throws while parsing the IQ result and closes
+     * the whole connection. Keeping the raw storage lets us drop only the bad entries.
+     */
     private fun joinBookmarks() {
         val conn = connection ?: return
         runCatching {
-            val bm = BookmarkManager.getBookmarkManager(conn)
-            for (conf in bm.bookmarkedConferences) {
-                if (conf.jid.localpartOrNull == null) {
-                    core.addXmlLog(account.id, false, "Skipping invalid group bookmark ${conf.jid}: no room name")
+            val raw = rawBookmarks(conn) ?: return@runCatching
+            val doc = parseXml(raw)
+            val root = doc.documentElement ?: return@runCatching
+            val conferences = root.getElementsByTagNameNS(BOOKMARK_NS, "conference")
+            var changed = false
+            data class RoomBookmark(val jid: String, val name: String, val nick: String, val password: String)
+            val valid = mutableListOf<RoomBookmark>()
+            for (i in 0 until conferences.length) {
+                val el = conferences.item(i) as? org.w3c.dom.Element ?: continue
+                val jid = el.getAttribute("jid")
+                if (!jid.contains('@')) {
+                    el.parentNode?.removeChild(el)
+                    changed = true
+                    core.addXmlLog(account.id, false, "Removed invalid group bookmark $jid")
                     continue
                 }
+                fun childText(name: String): String {
+                    val list = el.getElementsByTagNameNS(BOOKMARK_NS, name)
+                    return (list.item(0) as? org.w3c.dom.Element)?.textContent.orEmpty()
+                }
+                valid.add(RoomBookmark(jid, el.getAttribute("name").ifBlank { jid.substringBefore('@') },
+                    childText("nick"), childText("password")))
+            }
+            if (changed) writeBookmarks(conn, serializeXml(doc))
+            for (b in valid) {
                 scope.launch {
-                    val chat = core.ensureChat(account.id, conf.jid.toString(), "groupchat",
-                        conf.name ?: conf.jid.toString().substringBefore('@'))
-                    joinRoom(chat, conf.nickname?.toString() ?: "", conf.password ?: "")
+                    val chat = core.ensureChat(account.id, b.jid, "groupchat", b.name)
+                    joinRoom(chat, b.nick, b.password)
                 }
             }
         }
+    }
+
+    private fun rawBookmarks(conn: XMPPConnection): String? {
+        PrivateDataManager.addPrivateDataProvider("storage", "bookmarks", rawBookmarkProvider)
+        val data = runCatching { PrivateDataManager.getInstanceFor(conn).getPrivateData("storage", "bookmarks") }
+            .getOrNull() ?: return null
+        return stripXmlDeclaration(data.toXML().toString())
+    }
+
+    private fun writeBookmarks(conn: XMPPConnection, xml: String) {
+        PrivateDataManager.addPrivateDataProvider("storage", "bookmarks", rawBookmarkProvider)
+        PrivateDataManager.getInstanceFor(conn).setPrivateData(RawPrivateData(stripXmlDeclaration(xml)))
+    }
+
+    private fun stripXmlDeclaration(xml: String): String =
+        if (xml.startsWith("<?xml")) xml.substringAfter("?>").trimStart() else xml
+
+    private fun serializeXml(doc: org.w3c.dom.Document): String {
+        val out = java.io.StringWriter()
+        val transformer = javax.xml.transform.TransformerFactory.newInstance().newTransformer()
+        transformer.transform(javax.xml.transform.dom.DOMSource(doc), javax.xml.transform.stream.StreamResult(out))
+        return stripXmlDeclaration(out.toString())
     }
 
     // ============================================================ outgoing
