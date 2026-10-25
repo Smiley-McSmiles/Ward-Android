@@ -357,7 +357,6 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
     var error by remember { mutableStateOf("") }
     var paused by remember { mutableStateOf(false) }
     var frozen by remember { mutableStateOf<List<org.ward.android.XmlLogEntry>>(emptyList()) }
-    var pendingSave by remember { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -365,13 +364,15 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
     val saveLog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         AppLockStore.endExternalActivity()
         if (uri == null) return@rememberLauncherForActivityResult
-        val text = pendingSave
-        pendingSave = ""
         scope.launch {
             val ok = runCatching {
                 withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
-                        ?: error("Could not open the selected file")
+                    val source = java.io.File(context.cacheDir, "xml-console-export.txt")
+                    if (!source.exists()) error("Nothing to save")
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        source.inputStream().use { it.copyTo(out) }
+                    } ?: error("Could not open the selected file")
+                    source.delete()
                 }
             }.isSuccess
             android.widget.Toast.makeText(context, if (ok) "XML console saved" else "Could not save XML console",
@@ -393,9 +394,16 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
                 if (filteredLog.isEmpty()) {
                     android.widget.Toast.makeText(context, "Nothing to save", android.widget.Toast.LENGTH_SHORT).show()
                 } else {
-                    pendingSave = filteredLog.joinToString("\n\n") { (if (it.incoming) "← " else "→ ") + it.text }
-                    AppLockStore.beginExternalActivity()
-                    saveLog.launch("ward-xml-${System.currentTimeMillis()}.txt")
+                    val exportText = filteredLog.joinToString("\n\n") { (if (it.incoming) "← " else "→ ") + it.text }
+                    scope.launch {
+                        // The document picker can recreate the activity. Keep the data in a cache
+                        // file so the result callback still has the log after recreation.
+                        withContext(Dispatchers.IO) {
+                            java.io.File(context.cacheDir, "xml-console-export.txt").writeText(exportText)
+                        }
+                        AppLockStore.beginExternalActivity()
+                        saveLog.launch("ward-xml-${System.currentTimeMillis()}.txt")
+                    }
                 }
             }) { Icon(Icons.Filled.Save, "Save as") }
             IconButton(onClick = {
