@@ -57,6 +57,9 @@ class CallManager(private val session: XmppSession) {
     private val discoveryLock = Object()
     @Volatile private var discoveryStarted = false
     @Volatile private var discoveryDone = false
+    private var connectTimeout: Runnable? = null
+    private val gatheredCandidateTypes = mutableSetOf<String>()
+    private val receivedCandidateTypes = mutableSetOf<String>()
 
     fun current(): CallUiState? = session.core.call.value
 
@@ -76,6 +79,7 @@ class CallManager(private val session: XmppSession) {
         remoteSet = false
         answering = false
         publish(CallUiState(sid, peerJid, peerName, video, false, "OUTGOING"))
+        armConnectTimeout()
         discoverTurnServices()
         sendJmi("propose", mapOf("video" to video))
     }
@@ -116,6 +120,7 @@ class CallManager(private val session: XmppSession) {
         }
         answering = true
         publish(state.copy(phase = "CONNECTING", incoming = false))
+        armConnectTimeout()
         // XEP-0353: the caller needs "proceed"; "accept" tells our other devices to stop ringing.
         sendJmi("proceed", emptyMap(), id = sid)
         session.connection?.user?.asBareJid()?.toString()?.let { own ->
@@ -376,6 +381,7 @@ class CallManager(private val session: XmppSession) {
                 session.core.call.value?.let { s ->
                     if (s.phase != "ACTIVE" && s.phase != "ENDED") {
                         publish(s.copy(phase = "CONNECTING", incoming = false))
+                        armConnectTimeout()
                     }
                 }
             }
@@ -408,7 +414,13 @@ class CallManager(private val session: XmppSession) {
             val candidates = content.getElementsByTagNameNS(JingleSdp.NS_ICE, "candidate")
             for (i in 0 until candidates.length) {
                 val e = candidates.item(i) as org.w3c.dom.Element
-                val c = IceCandidate(mid, 0, "candidate:${e.getAttribute("foundation")} ${e.getAttribute("component").ifBlank { "1" }} ${e.getAttribute("protocol").ifBlank { "udp" }} ${e.getAttribute("priority")} ${e.getAttribute("ip")} ${e.getAttribute("port")} typ ${e.getAttribute("type").ifBlank { "host" }}")
+                val kind = e.getAttribute("type").ifBlank { "host" }
+                synchronized(receivedCandidateTypes) {
+                    if (receivedCandidateTypes.add(kind)) {
+                        session.core.addXmlLog(session.account.id, true, "Received ICE candidate: $kind")
+                    }
+                }
+                val c = IceCandidate(mid, 0, "candidate:${e.getAttribute("foundation")} ${e.getAttribute("component").ifBlank { "1" }} ${e.getAttribute("protocol").ifBlank { "udp" }} ${e.getAttribute("priority")} ${e.getAttribute("ip")} ${e.getAttribute("port")} typ $kind")
                 if (remoteSet) peer?.addIceCandidate(c) else pendingCandidates.add(c)
             }
         }
@@ -434,6 +446,34 @@ class CallManager(private val session: XmppSession) {
         if (!remoteSet) return
         for (c in pendingCandidates) peer?.addIceCandidate(c)
         pendingCandidates.clear()
+    }
+
+    private fun armConnectTimeout() {
+        cancelConnectTimeout()
+        val timeout = Runnable {
+            val state = session.core.call.value ?: return@Runnable
+            if (state.phase in listOf("OUTGOING", "RINGING", "INCOMING", "CONNECTING")) {
+                fail("The call could not connect after 40 seconds. ${connectFailureHint()}")
+            }
+        }
+        connectTimeout = timeout
+        handler.postDelayed(timeout, 40_000L)
+    }
+
+    private fun cancelConnectTimeout() {
+        connectTimeout?.let { handler.removeCallbacks(it) }
+        connectTimeout = null
+    }
+
+    private fun connectFailureHint(): String {
+        val localRelay = synchronized(gatheredCandidateTypes) { "relay" in gatheredCandidateTypes }
+        val remoteRelay = synchronized(receivedCandidateTypes) { "relay" in receivedCandidateTypes }
+        return when {
+            !localRelay && !remoteRelay -> "No relay candidate was gathered on either side; check the TURN service."
+            !localRelay -> "This phone gathered no relay candidate; check the TURN username, password and port range."
+            !remoteRelay -> "The other side sent no relay candidate; check its TURN settings."
+            else -> "Relay candidates were exchanged but could not connect; check that coturn can reach the peer and its relay port range is open."
+        }
     }
 
     // ================================================================ TURN / STUN
@@ -499,19 +539,19 @@ class CallManager(private val session: XmppSession) {
         for (i in 0 until services.length) {
             val e = services.item(i) as? org.w3c.dom.Element ?: continue
             val type = e.getAttribute("type").lowercase()
-            if (type != "stun" && type != "turn") continue
+            if (type != "stun" && type != "turn" && type != "turns") continue
             val host = e.getAttribute("host")
             if (host.isBlank()) continue
             val port = e.getAttribute("port").ifBlank { "3478" }
             val transport = e.getAttribute("transport").ifBlank { "udp" }
-            val scheme = if (type == "turn" && transport == "tls") "turns" else type
-            val query = if (type == "turn") "?transport=${if (transport == "tls") "tcp" else transport}" else ""
+            val scheme = if (type == "turns" || transport == "tls") "turns" else type
+            val query = if (type == "turn" || type == "turns") "?transport=${if (type == "turns" || transport == "tls") "tcp" else transport}" else ""
             val url = "$scheme:$host:$port$query"
             val user = e.getAttribute("username")
             val pass = e.getAttribute("password")
             val secret = e.getAttribute("secret")
             val b = PeerConnection.IceServer.builder(url)
-            if (type == "turn") {
+            if (type == "turn" || type == "turns") {
                 val (u, p) = turnCredential(
                     user.ifBlank { session.core.settings.string("calls.turn_user") },
                     pass.ifBlank { session.core.settings.string("calls.turn_password") },
@@ -617,17 +657,29 @@ class CallManager(private val session: XmppSession) {
                         }
                     }
                 } else if (state == PeerConnection.IceConnectionState.FAILED) {
-                    fail("The call could not connect (ICE failed)")
+                    fail("The call could not connect. ${connectFailureHint()}")
                 }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                session.core.addXmlLog(session.account.id, true, "WebRTC ICE gathering: $state")
+            }
+            override fun onIceCandidateError(event: IceCandidateErrorEvent) {
+                session.core.addXmlLog(session.account.id, true,
+                    "WebRTC ICE candidate error ${event.errorCode}: ${event.errorText} (${event.url})")
+            }
             override fun onIceCandidate(candidate: IceCandidate) {
                 if (sid.isBlank()) return
                 val c = candidate.sdp ?: return
                 val parts = c.removePrefix("candidate:").split(' ')
                 if (parts.size < 8) return
-                if (!parts[2].equals("udp", ignoreCase = true)) return
+                val kind = parts[7]
+                synchronized(gatheredCandidateTypes) {
+                    if (gatheredCandidateTypes.add(kind)) {
+                        session.core.addXmlLog(session.account.id, true,
+                            "Gathered ICE candidate: $kind (${parts[2]})")
+                    }
+                }
                 if (!canSendCandidates) { localCandidates.add(candidate); return }
                 sendCandidate(candidate)
             }
@@ -676,6 +728,7 @@ class CallManager(private val session: XmppSession) {
     }
 
     private fun publish(state: CallUiState) {
+        if (state.phase == "ACTIVE" || state.phase == "ENDED") cancelConnectTimeout()
         session.core.setCallState(state.copy(accountId = session.account.id))
     }
 
@@ -685,6 +738,7 @@ class CallManager(private val session: XmppSession) {
     }
 
     private fun teardown() {
+        cancelConnectTimeout()
         runCatching { videoCapturer?.stopCapture() }
         runCatching { videoCapturer?.dispose() }
         runCatching { videoTrack?.dispose() }
@@ -699,12 +753,15 @@ class CallManager(private val session: XmppSession) {
         runCatching { eglBase?.release() }; eglBase = null
         localRenderer = null; remoteRenderer = null
         pendingCandidates.clear(); localCandidates.clear(); remoteSet = false; gatherScheduled = false
+        synchronized(gatheredCandidateTypes) { gatheredCandidateTypes.clear() }
+        synchronized(receivedCandidateTypes) { receivedCandidateTypes.clear() }
         canSendCandidates = false; pendingOfferXml = null
         synchronized(discoveryLock) { discoveryStarted = false; discoveryDone = false }
         sid = ""; peerJid = ""; peerFullJid = ""; peerName = ""; wantsVideo = false; initiatorJid = ""
     }
 
     private fun fail(reason: String) {
+        cancelConnectTimeout()
         val state = session.core.call.value ?: return
         if (state.phase == "ENDED") return
         session.core.addXmlLog(session.account.id, false, "call failed: $reason")
