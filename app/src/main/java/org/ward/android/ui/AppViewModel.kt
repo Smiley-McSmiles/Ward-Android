@@ -71,12 +71,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun sendFile(uri: Uri) {
         val chat = selectedChatEntity.value ?: return
         viewModelScope.launch { core.sendFile(chat, uri) }
     }
 
     /** Upload several picked files in order, so their messages keep the picker's order. */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun sendFiles(uris: List<Uri>) {
         val chat = selectedChatEntity.value ?: return
         viewModelScope.launch {

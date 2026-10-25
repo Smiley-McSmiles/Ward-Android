@@ -15,6 +15,8 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -40,6 +42,7 @@ import org.ward.android.data.*
 import org.ward.android.ConnectionState
 import org.ward.android.util.JidUtil
 import org.ward.android.util.TimeUtil
+import org.ward.android.xmpp.contactJidFromQr
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -505,6 +508,16 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
     val accounts by vm.accounts.collectAsState()
     var jid by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    val scan = rememberLauncherForActivityResult(ScanContract()) { result ->
+        org.ward.android.util.AppLockStore.endExternalActivity()
+        val scanned = result.contents
+        if (scanned != null) {
+            val address = contactJidFromQr(scanned)
+            if (address != null) { jid = address; error = "" }
+            else error = "That QR code does not contain a valid XMPP address"
+        }
+    }
     var accountId by remember(initialAccountId, accounts.map { it.id }) {
         mutableStateOf(initialAccountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id ?: 0L)
     }
@@ -532,7 +545,24 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
                     if (jid.isNotBlank()) IconButton(onClick = { jid = "" }) { Icon(Icons.Filled.Close, "Clear") }
                 },
                 singleLine = true, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth())
-            if (jid.isNotBlank() && !valid) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                org.ward.android.util.AppLockStore.beginExternalActivity()
+                scan.launch(ScanOptions().apply {
+                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    setPrompt("Scan a contact QR code")
+                    setBeepEnabled(false)
+                    setOrientationLocked(true)
+                })
+            }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.QrCodeScanner, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Scan QR code")
+            }
+            if (error.isNotBlank()) {
+                Text(error, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+            } else if (jid.isNotBlank() && !valid) {
                 Text("Enter a full address, like name@example.org",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(start = 4.dp, top = 4.dp))

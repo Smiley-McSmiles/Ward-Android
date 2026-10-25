@@ -1317,7 +1317,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             var changed = false
             data class RoomBookmark(val jid: String, val name: String, val nick: String, val password: String)
             val valid = mutableListOf<RoomBookmark>()
-            for (i in 0 until conferences.length) {
+            for (i in conferences.length - 1 downTo 0) {
                 val el = conferences.item(i) as? org.w3c.dom.Element ?: continue
                 val jid = el.getAttribute("jid")
                 if (!jid.contains('@')) {

@@ -68,13 +68,24 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     var file by remember(url) { mutableStateOf(localFile) }
     var failed by remember(url) { mutableStateOf(false) }
     var loading by remember(url) { mutableStateOf(localFile == null) }
+    var downloadRequested by remember(url) { mutableStateOf(false) }
     val progressMap by vm.core.downloadProgress.collectAsState()
     val progress = progressMap[url]
     val context = LocalContext.current
-    LaunchedEffect(url) {
-        if (file == null) file = vm.core.localFile(url, downloadName, mime)
-        failed = file == null
-        loading = false
+    val autoLimit = (vm.settings.string("attachments.auto_download", "1024").toIntOrNull() ?: 1024) * 1024L
+    val allowUnmetered = vm.settings.bool("attachments.accept_unmetered") &&
+        (context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false)
+    val autoDownload = localFile != null || url.startsWith("local://") || size <= 0L ||
+        allowUnmetered || (autoLimit > 0L && size <= autoLimit)
+    LaunchedEffect(url, downloadRequested) {
+        if (file == null && (autoDownload || downloadRequested)) {
+            loading = true
+            file = vm.core.localFile(url, downloadName, mime)
+            failed = file == null
+            loading = false
+        } else if (file == null) {
+            loading = false
+        }
     }
     val scope = rememberCoroutineScope()
     val saveLauncher = rememberLauncherForActivityResult(
@@ -128,10 +139,13 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
                 Text("Downloading… ${if (progress != null) "${(progress * 100).toInt()}%" else ""}",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            else Text(if (failed) "Could not load image" else name, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+            else Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (failed) "Could not load image" else name, color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                if (!failed) TextButton(onClick = { downloadRequested = true }) { Text("Download") }
+            }
         }
-        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, mime, pending, ::saveFile)
-        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url, pending, ::saveFile)
+        mime.startsWith("video/") -> VideoAttachment(file, name, loading, failed, progress, size, encrypted, mime, pending, { downloadRequested = true }, ::saveFile)
+        mime.startsWith("audio/") -> AudioAttachment(file, name, loading, failed, progress, mime, vm, url, pending, { downloadRequested = true }, ::saveFile)
         else -> {
             Row(Modifier.combinedClickable(
                 onClick = {
@@ -154,6 +168,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
                         Text(if (pending) "Sending…" else if (failed) "Download failed" else formatBytes(size) +
                             if (encrypted) " · encrypted" else "", fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (file == null && !failed) TextButton(onClick = { downloadRequested = true }) { Text("Download") }
                     }
                 }
             }
@@ -164,7 +179,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
 @Composable
 private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
                             progress: Float?, size: Long, encrypted: Boolean, mime: String, pending: Boolean,
-                            onLongClick: () -> Unit) {
+                            onDownload: () -> Unit, onLongClick: () -> Unit) {
     if (file == null) {
         Box(Modifier.widthIn(max = 290.dp).fillMaxWidth().height(150.dp)
             .clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
@@ -181,6 +196,7 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
                     Icon(Icons.Filled.Movie, null, Modifier.size(34.dp))
                     Text(if (failed) "Could not load video" else name, fontSize = 12.sp,
                         color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (!failed) TextButton(onClick = onDownload) { Text("Download") }
                 }
             }
         }
@@ -395,7 +411,7 @@ private fun openWithDefaultApp(context: android.content.Context, file: File, mim
 @Composable
 private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed: Boolean,
                             progress: Float?, mime: String, vm: AppViewModel, url: String, pending: Boolean,
-                            onLongClick: () -> Unit) {
+                            onDownload: () -> Unit, onLongClick: () -> Unit) {
     val context = LocalContext.current
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember { mutableStateOf(false) }
@@ -433,8 +449,9 @@ private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed:
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        IconButton(onClick = { file?.let { openWithDefaultApp(context, it, mime) } }, enabled = file != null) {
-            Icon(Icons.Filled.OpenInNew, "Open audio with another app")
+        IconButton(onClick = { if (file == null) onDownload() else openWithDefaultApp(context, file, mime) }, enabled = file != null || !loading) {
+            Icon(if (file == null) Icons.Filled.Download else Icons.Filled.OpenInNew,
+                if (file == null) "Download audio" else "Open audio with another app")
         }
     }
 }

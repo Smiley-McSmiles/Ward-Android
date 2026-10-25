@@ -89,7 +89,8 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
 
 fun pageIcon(key: String) = when (key) {
     "general" -> Icons.Filled.Tune; "appearance" -> Icons.Filled.Palette; "chats" -> Icons.Filled.Chat
-    "calls" -> Icons.Filled.Call; "notifications" -> Icons.Filled.Notifications; "accounts" -> Icons.Filled.People
+    "calls" -> Icons.Filled.Call; "attachments" -> Icons.Filled.AttachFile
+    "notifications" -> Icons.Filled.Notifications; "accounts" -> Icons.Filled.People
     "security" -> Icons.Filled.Lock; "encryption" -> Icons.Filled.Lock; "storage" -> Icons.Filled.Storage; else -> Icons.Filled.Build
 }
 
@@ -225,6 +226,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
     var password by remember { mutableStateOf("") }
     var confirmRemove by remember { mutableStateOf(false) }
     var showDevices by remember { mutableStateOf(false) }
+    var qrOpen by remember { mutableStateOf(false) }
     var pgpFingerprint by remember { mutableStateOf("") }
     var pgpBusy by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -280,6 +282,12 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
                     }
                 }) { Text("Save name") }
             }
+            ListItem(
+                headlineContent = { Text("Share contact QR code") },
+                supportingContent = { Text("Let someone scan this address to add you") },
+                leadingContent = { Icon(Icons.Filled.QrCode2, null) },
+                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                modifier = Modifier.clickable { qrOpen = true })
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("Security", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(16.dp, 8.dp))
@@ -327,6 +335,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
         }
     }
     if (showDevices) DevicesSheet(vm, acc.id, acc.jid, own = true, onDismiss = { showDevices = false })
+    if (qrOpen) QrCodeDialog("Scan to add ${acc.displayName}", "xmpp:${acc.jid}", onDismiss = { qrOpen = false })
     if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false }, title = { Text("Remove ${acc.jid}?") },
         text = { Text("Ward forgets this account and its local history. The account itself keeps existing on the server.") },
         confirmButton = { TextButton(onClick = { confirmRemove = false; vm.deleteAccount(acc); onBack() }) { Text("Remove") } },

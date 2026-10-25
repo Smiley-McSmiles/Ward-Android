@@ -1,7 +1,16 @@
 package org.ward.android
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.effect.Presentation
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.Transformer
 import android.provider.OpenableColumns
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -327,13 +336,98 @@ class WardCore private constructor(val context: Context) {
 
     suspend fun openChatWith(accountId: Long, jid: String): ChatEntity = ensureChat(accountId, jid)
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     suspend fun sendFile(chat: ChatEntity, uri: Uri): MessageEntity? {
         val session = sessions[chat.accountId] ?: return null
-        val name = queryName(uri) ?: "file"
-        val mime = context.contentResolver.getType(uri) ?: org.ward.android.xmpp.guessMime(name)
-        val tmp = File(context.cacheDir, "upload-${System.currentTimeMillis()}-${name.replace('/', '_')}")
+        var name = queryName(uri) ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "file"
+        var mime = context.contentResolver.getType(uri) ?: org.ward.android.xmpp.guessMime(name)
+        var tmp = File(context.cacheDir, "upload-${System.currentTimeMillis()}-${name.replace('/', '_')}")
         withContext(Dispatchers.IO) {
             context.contentResolver.openInputStream(uri)?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+        }
+        if (mime.startsWith("image/") && mime != "image/gif") {
+            withContext(Dispatchers.IO) {
+                val setting = settings.string("attachments.image_compression", "large")
+                if (setting != "off") {
+                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(tmp.absolutePath, options)
+                    val large = tmp.length() > 1_000_000L || options.outWidth > 2000 || options.outHeight > 2000
+                    if (setting == "always" || large) {
+                        runCatching {
+                            val bounds = BitmapFactory.Options().apply { inSampleSize = 1 }
+                            while (options.outWidth / bounds.inSampleSize > 2400 || options.outHeight / bounds.inSampleSize > 2400) {
+                                bounds.inSampleSize *= 2
+                            }
+                            val decoded = BitmapFactory.decodeFile(tmp.absolutePath, bounds) ?: return@runCatching
+                            val exif = androidx.exifinterface.media.ExifInterface(tmp)
+                            val orientation = exif.getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                                androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL)
+                            val matrix = Matrix()
+                            when (orientation) {
+                                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                            }
+                            val bitmap = if (orientation == androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL) decoded
+                                else Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+                            val format = when {
+                                mime == "image/png" -> Bitmap.CompressFormat.PNG
+                                mime == "image/webp" -> Bitmap.CompressFormat.WEBP
+                                else -> Bitmap.CompressFormat.JPEG
+                            }
+                            val compressed = File(context.cacheDir, "compressed-${tmp.name}")
+                            compressed.outputStream().use { out ->
+                                bitmap.compress(format, if (format == Bitmap.CompressFormat.PNG) 100 else 85, out)
+                            }
+                            if (compressed.length() > 0 && (setting == "always" || compressed.length() < tmp.length())) {
+                                tmp.delete()
+                                compressed.renameTo(tmp)
+                                if (format == Bitmap.CompressFormat.JPEG) mime = "image/jpeg"
+                            } else compressed.delete()
+                        }
+                    }
+                }
+            }
+        }
+        if (mime.startsWith("video/")) {
+            val quality = settings.string("attachments.video_quality", "medium")
+            if (quality != "original") {
+                withContext(Dispatchers.IO) {
+                    val height = when (quality) { "low" -> 240; "high" -> 720; else -> 360 }
+                    runCatching {
+                        val item = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(tmp)))
+                            .setEffects(Effects(emptyList(), listOf(Presentation.createForHeight(height))))
+                            .build()
+                        val out = File(context.cacheDir, "video-${System.currentTimeMillis()}.mp4")
+                        val latch = java.util.concurrent.CountDownLatch(1)
+                        val result = java.util.concurrent.atomic.AtomicReference<File?>()
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            runCatching {
+                                val transformer = Transformer.Builder(context)
+                                    .setVideoMimeType(MimeTypes.VIDEO_H264)
+                                    .build()
+                                transformer.addListener(object : Transformer.Listener {
+                                    override fun onTransformationCompleted(inputMediaItem: MediaItem) {
+                                        result.set(out); latch.countDown()
+                                    }
+                                    override fun onTransformationError(inputMediaItem: MediaItem, exception: Exception) {
+                                        latch.countDown()
+                                    }
+                                })
+                                transformer.start(item, out.absolutePath)
+                            }.onFailure { latch.countDown() }
+                        }
+                        latch.await(180, java.util.concurrent.TimeUnit.SECONDS)
+                        if (result.get() == null) out.delete()
+                        if (out.exists() && out.length() > 0 && out.length() < tmp.length()) {
+                            tmp.delete()
+                            out.renameTo(tmp)
+                            mime = "video/mp4"
+                            name = name.substringBeforeLast('.', name) + ".mp4"
+                        } else out.delete()
+                    }
+                }
+            }
         }
         val acc = dao.account(chat.accountId) ?: return null
         val id = JidUtil.randomId()
@@ -388,6 +482,8 @@ class WardCore private constructor(val context: Context) {
 
     suspend fun localFile(url: String, name: String, mime: String): File? {
         val cache = File(context.cacheDir, "files").apply { mkdirs() }
+        val noMedia = File(cache, ".nomedia")
+        if (settings.bool("attachments.hide_gallery")) noMedia.createNewFile() else noMedia.delete()
         val out = File(cache, org.ward.android.util.FileCrypto.cacheName(url, name))
         if (out.exists() && out.length() > 0) return out
         val link = org.ward.android.util.FileCrypto.parse(url)

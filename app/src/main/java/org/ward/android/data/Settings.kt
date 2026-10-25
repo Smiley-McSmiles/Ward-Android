@@ -25,6 +25,7 @@ data class SettingSpec(
 object SettingsSchema {
     val pages = listOf(
         "general" to "General", "security" to "Security", "appearance" to "Appearance", "chats" to "Chats", "calls" to "Calls",
+        "attachments" to "Attachments",
         "notifications" to "Notifications", "accounts" to "Accounts", "encryption" to "Encryption",
         "storage" to "Storage", "advanced" to "Advanced"
     )
@@ -80,6 +81,14 @@ object SettingsSchema {
         b("chats.markdown_others", "Render Markdown from other apps", "Other apps use simpler styling, where *text* is bold instead of italic", "chats", "Messages"),
         i("chats.collapse_after", "Collapse long messages after", "Lines; 0 never collapses", "chats", "Messages", 25, 0, 100, 5, "lines"),
         c("chats.animations", "Play animated images", "", "chats", "Messages", "always", "always" to "Always", "hover" to "On hover", "never" to "Never"),
+        c("attachments.image_compression", "Image Compression", "Compress outgoing photos before upload", "attachments", "Sending", "large",
+            "off" to "Off", "large" to "Large images only", "always" to "Always"),
+        c("attachments.video_quality", "Video Quality", "Quality used when preparing outgoing videos", "attachments", "Sending", "medium",
+            "low" to "Low (240p)", "medium" to "Medium (360p)", "high" to "High (720p)", "original" to "Original"),
+        c("attachments.auto_download", "Automatic download", "Maximum file size downloaded automatically", "attachments", "Receiving", 1024,
+            0 to "Never", 256 to "256 KiB", 1024 to "1024 KiB", 5120 to "5 MiB", 20480 to "20 MiB"),
+        b("attachments.accept_unmetered", "Always accept when unmetered", "Don't use the above size limit on unmetered networks", "attachments", "Receiving", true),
+        b("attachments.hide_gallery", "Hide media in gallery", "Hide received and sent media from system gallery views", "attachments", "Receiving"),
         c("chats.link_previews", "Link previews", "Fetching a preview shows your IP address to the website", "chats", "Messages", "contacts", "off" to "Off", "contacts" to "Only from contacts", "always" to "Always"),
         b("chats.confirm_delete", "Confirm “Delete for everyone”", "", "chats", "Messages", true),
         b("chats.send_typing", "Send typing indicators", "", "chats", "Sharing", true),
