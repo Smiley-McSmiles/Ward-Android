@@ -72,9 +72,13 @@ class WardCore private constructor(val context: Context) {
 
     suspend fun addAccount(jid: String, password: String, remember: Boolean = true, options: Map<String, String> = emptyMap(),
                            enabled: Boolean = true): AccountEntity {
+        val bare = JidUtil.bare(jid)
         val existing = dao.accountsNow()
+        if (existing.any { it.jid.equals(bare, ignoreCase = true) }) {
+            throw IllegalStateException("This account is already added.")
+        }
         val color = listOf("#3584e4", "#9141ac", "#26a269", "#e66100", "#c88800", "#2190a4")[existing.size % 6]
-        val acc = AccountEntity(jid = JidUtil.bare(jid), encryptedPassword = if (remember) SecretStore.encrypt(password) else "",
+        val acc = AccountEntity(jid = bare, encryptedPassword = if (remember) SecretStore.encrypt(password) else "",
             color = color, optionsJson = gson.toJson(options), nickname = existing.firstOrNull()?.nickname ?: "",
             enabled = enabled)
         val id = dao.insertAccount(acc)

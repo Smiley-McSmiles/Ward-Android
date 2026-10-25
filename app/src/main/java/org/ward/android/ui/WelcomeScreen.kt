@@ -280,7 +280,8 @@ Column(Modifier.widthIn(max = 460.dp)) {
                     scope.launch {
                         try {
                             withContext(Dispatchers.IO) { Registration.createAccount(domain, username, password) }
-                            vm.addAccount("$username@$domain", password, true)
+                            vm.addAccount("$username@$domain", password, true,
+                                onError = { error = it; busy = false })
                             busy = false
                         } catch (e: Exception) {
                             error = e.message ?: "Could not create the account"; busy = false
