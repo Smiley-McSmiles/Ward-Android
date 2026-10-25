@@ -1596,13 +1596,46 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         try {
             val mam = MamManager.getInstanceFor(conn)
             if (!mam.isSupported) return
-            val days = 7
-            val since = Date(System.currentTimeMillis() - days * 86_400_000L)
-            val query = mam.queryArchive(MamManager.MamQueryArgs.builder().setResultPageSize(100).limitResultsSince(since).build())
+            val prefs = core.context.getSharedPreferences("ward_mam", android.content.Context.MODE_PRIVATE)
+            val cursorKey = "last_id_${account.id}"
+            val lastSyncKey = "last_sync_${account.id}"
+            var cursor = prefs.getString(cursorKey, "").orEmpty()
+            var lastSync = prefs.getLong(lastSyncKey, 0L)
+            fun args(after: String): MamManager.MamQueryArgs {
+                val b = MamManager.MamQueryArgs.builder().setResultPageSize(100)
+                if (after.isNotBlank()) b.afterUid(after)
+                else {
+                    val floor = System.currentTimeMillis() - 7 * 86_400_000L
+                    val since = if (lastSync > 0L) maxOf(lastSync - 2_000L, floor) else floor
+                    b.limitResultsSince(Date(since))
+                }
+                return b.build()
+            }
+            var query = try {
+                mam.queryArchive(args(cursor))
+            } catch (e: Exception) {
+                if (cursor.isBlank()) throw e
+                // A cursor from an older archive/server can be rejected. Fall back to the
+                // normal seven-day window instead of flooding the server with retries.
+                cursor = ""
+                prefs.edit().remove(cursorKey).apply()
+                mam.queryArchive(args(cursor))
+            }
+            fun rememberCursor() {
+                val id = runCatching { query.mamResultExtensions.lastOrNull()?.id }.getOrNull()
+                val newest = runCatching {
+                    query.page.forwarded.mapNotNull { it.delayInformation?.stamp?.time }.maxOrNull()
+                }.getOrNull()
+                val edit = prefs.edit()
+                if (!id.isNullOrBlank()) { cursor = id; edit.putString(cursorKey, id) }
+                if (newest != null && newest > lastSync) { lastSync = newest; edit.putLong(lastSyncKey, newest) }
+                edit.apply()
+            }
             var msgs = query.page.forwarded
             var decrypted: List<MessageOrOmemoMessage>? = null
             if (omemoReady) runCatching { decrypted = omemo?.decryptMamQueryResult(query) }
             processMam(msgs, decrypted)
+            rememberCursor()
             var guard = 0
             while (!query.isComplete && guard++ < 20) {
                 if (query.pageNext(100).isEmpty()) break
@@ -1610,6 +1643,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 var more: List<MessageOrOmemoMessage>? = null
                 if (omemoReady) runCatching { more = omemo?.decryptMamQueryResult(query) }
                 processMam(query.page.forwarded, more)
+                rememberCursor()
             }
         } catch (e: Exception) {
             core.addXmlLog(account.id, false, "MAM sync failed: ${e.message}")
