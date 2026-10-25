@@ -552,7 +552,7 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
                     setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                     setPrompt("Scan a contact QR code")
                     setBeepEnabled(false)
-                    setOrientationLocked(true)
+                    setOrientationLocked(false)
                 })
             }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Filled.QrCodeScanner, null)
