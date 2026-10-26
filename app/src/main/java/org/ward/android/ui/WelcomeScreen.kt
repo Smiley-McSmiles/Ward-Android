@@ -126,8 +126,10 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
     }
     Scaffold(topBar = {
         TopAppBar(title = { Text("Sign in") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
-        })
+            WardBackButton(onBack)
+        }, colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background))
     }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
@@ -252,8 +254,10 @@ private fun CreateAccountPage(vm: AppViewModel, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     Scaffold(topBar = {
         TopAppBar(title = { Text("Create an account") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
-        })
+            WardBackButton(onBack)
+        }, colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background))
     }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
@@ -306,8 +310,10 @@ private fun InvitePage(vm: AppViewModel, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     Scaffold(topBar = {
         TopAppBar(title = { Text("Invite link") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
-        })
+            WardBackButton(onBack)
+        }, colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background))
     }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(20.dp)) {
             Text("Paste the invite link you received. It lets you create an account on that server.",

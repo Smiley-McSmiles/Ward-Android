@@ -9,12 +9,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -87,96 +89,157 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
         return
     }
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().padding(pad).statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().padding(pad).statusBarsPadding().navigationBarsPadding()) {
         if (accounts.size > 1) {
-            Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                ScrollableTabRow(selectedTabIndex = accounts.indexOfFirst { it.id == accountId }.coerceAtLeast(0), edgePadding = 0.dp) {
-                    accounts.forEach { a -> Tab(selected = a.id == accountId, onClick = { accountId = a.id },
-                        text = { Text(a.domain) }) }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                accounts.forEach { a ->
+                    FilterChip(selected = a.id == accountId, onClick = { accountId = a.id },
+                        label = { Text(a.domain) })
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
             WardBackButton(onBack)
-            Column(Modifier.weight(1f)) {
-                Text(acc?.domain ?: "Server", style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground)
-                Text("Administration", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(acc?.domain ?: "Server", style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text("Administration", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = { refresh++ }) {
-                Icon(Icons.Filled.Refresh, "Refresh", tint = MaterialTheme.colorScheme.onBackground)
-            }
-            IconButton(onClick = { disco = true }) {
-                Icon(Icons.Filled.Dns, "Service discovery", tint = MaterialTheme.colorScheme.onBackground)
-            }
-            IconButton(onClick = { xml = true }) {
-                Icon(Icons.Filled.Code, "XML console", tint = MaterialTheme.colorScheme.onBackground)
-            }
+            ServerActionButton(Icons.Filled.Refresh, "Refresh", enabled = !loading) { refresh++ }
+            ServerActionButton(Icons.Filled.Dns, "Service discovery") { disco = true }
+            ServerActionButton(Icons.Filled.Code, "XML console") { xml = true }
         }
+
         if (states[accountId]?.state != "online") {
-            ListItem(headlineContent = { Text("Connect to see server administration") },
-                supportingContent = { Text(states[accountId]?.error ?: "This account is offline") },
-                leadingContent = { Icon(Icons.Filled.CloudOff, null) })
-            if (acc != null) Button(onClick = { vm.connect(acc) }, modifier = Modifier.padding(16.dp)) { Text("Connect") }
+            Spacer(Modifier.height(8.dp))
+            SettingsGroup {
+                ListItem(
+                    headlineContent = { Text("Connect to manage this server", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = { Text(states[accountId]?.error?.takeIf { it.isNotBlank() }
+                        ?: "This account is offline. Connect it to load administration commands.") },
+                    leadingContent = { SettingsIconTile(Icons.Filled.CloudOff, WardIconColors.orange) })
+                SettingsDivider()
+                Row(Modifier.fillMaxWidth().padding(16.dp)) {
+                    if (acc != null) Button(onClick = { vm.connect(acc) }) { Text("Connect") }
+                }
+            }
             return@Column
         }
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
-            item {
-                Text("Overview", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(16.dp, 10.dp))
-            }
-            if (stats.isEmpty() && !loading) item {
-                ListItem(headlineContent = { Text("No statistics") },
-                    supportingContent = { Text("The server shares no numbers, or this account is not an admin") },
-                    leadingContent = { Icon(Icons.Filled.Info, null) })
-            }
-            items(stats.entries.toList(), key = { it.key }) { (k, v) ->
-                val label = when (k) { "registeredusersnum" -> "Registered users"; "onlineusersnum" -> "Online users";
-                    "activeusersnum" -> "Active users"; "uptime" -> "Uptime"; else -> k }
-                ListItem(headlineContent = { Text(label) }, supportingContent = { Text(v, fontWeight = FontWeight.Medium) })
-            }
-            item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Invites", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                    TextButton(onClick = {
-                        scope.launch {
-                            try {
-                                val link = withContext(Dispatchers.IO) { session?.admin?.createInvite(false) ?: "" }
-                                if (link.isNotBlank()) invite = link
-                            } catch (e: Exception) { error = adminError(e) }
-                        }
-                    }) { Icon(Icons.Filled.AddLink, null); Spacer(Modifier.width(4.dp)); Text("Create account invite") }
+
+        if (loading) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
+        }
+
+        LazyColumn(Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 34.dp)) {
+            if (error.isNotBlank()) {
+                item {
+                    SettingsGroup {
+                        ListItem(
+                            headlineContent = { Text("Could not load administration", style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text(error) },
+                            leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
+                    }
                 }
-                ListItem(headlineContent = { Text("Invite links let someone create an account on this server") },
-                    leadingContent = { Icon(Icons.Filled.Link, null) })
             }
-            if (users.first.isNotEmpty()) {
-                item { Text(if (users.second == "online") "Online now" else "Users", style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(16.dp, 10.dp)) }
-                itemsIndexed(users.first.take(200), key = { i, u -> "$i:$u" }) { i, u -> ListItem(headlineContent = { Text(u) },
-                    leadingContent = { Avatar(u, 34) }) }
-            }
+
+            if (stats.isNotEmpty() || !loading) {
+            item { SettingsSectionLabel("Overview", "Server statistics published to administrators") }
             item {
-                Text("Commands", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(16.dp, 10.dp))
-                Text("Everything the server lets administrators do", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsGroup {
+                    if (stats.isEmpty() && !loading) {
+                        ListItem(
+                            headlineContent = { Text("No statistics", style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text("The server shares no numbers, or this account is not an admin.") },
+                            leadingContent = { SettingsIconTile(Icons.Filled.Analytics, WardIconColors.grey) })
+                    } else {
+                        stats.entries.toList().forEachIndexed { index, (key, value) ->
+                            if (index > 0) SettingsDivider()
+                            ListItem(
+                                headlineContent = { Text(statLabel(key), style = MaterialTheme.typography.titleMedium) },
+                                leadingContent = { SettingsIconTile(statIcon(key), statColor(key)) },
+                                trailingContent = {
+                                    Text(value, style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.primary)
+                                })
+                        }
+                    }
+                }
             }
-            if (list.isEmpty() && !loading) item {
-                ListItem(headlineContent = { Text("No commands are available to this account") },
-                    supportingContent = { Text("Prosody and ejabberd expose their administration here when this account is an admin") },
-                    leadingContent = { Icon(Icons.Filled.Terminal, null) })
             }
-            items(list, key = { it.node + it.jid }) { cmd ->
-                ListItem(headlineContent = { Text(cmd.name) }, supportingContent = { Text(cmd.node) },
-                    leadingContent = { Icon(if (cmd.node.contains("prosody")) Icons.Filled.Extension else Icons.Filled.Terminal, null) },
-                    trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                    modifier = Modifier.clickable { command = cmd })
+
+            item { SettingsSectionLabel("Invites") }
+            item {
+                SettingsGroup {
+                    ListItem(
+                        headlineContent = { Text("Create account invite", style = MaterialTheme.typography.titleMedium) },
+                        supportingContent = { Text("Generate a one-time link for a new account on this server") },
+                        leadingContent = { SettingsIconTile(Icons.Filled.AddLink, WardIconColors.green) },
+                        trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                        modifier = Modifier.clickable(enabled = !loading) {
+                            scope.launch {
+                                try {
+                                    val link = withContext(Dispatchers.IO) { session?.admin?.createInvite(false) ?: "" }
+                                    if (link.isNotBlank()) invite = link
+                                } catch (e: Exception) { error = adminError(e) }
+                            }
+                        })
+                    SettingsDivider()
+                    ListItem(
+                        headlineContent = { Text("How invites work", style = MaterialTheme.typography.titleMedium) },
+                        supportingContent = { Text("Invite links let someone create an account on this server. Each link works once.") },
+                        leadingContent = { SettingsIconTile(Icons.Filled.Link, WardIconColors.blue) })
+                }
+            }
+
+            if (users.first.isNotEmpty()) {
+                item { SettingsSectionLabel(if (users.second == "online") "Online now" else "Users") }
+                item {
+                    SettingsGroup {
+                        users.first.take(200).forEachIndexed { index, user ->
+                            if (index > 0) SettingsDivider()
+                            ListItem(
+                                headlineContent = { Text(user, style = MaterialTheme.typography.titleMedium) },
+                                leadingContent = { Avatar(user, 36) })
+                        }
+                    }
+                }
+            }
+
+            if (list.isNotEmpty() || !loading) {
+            item { SettingsSectionLabel("Commands", "Everything the server lets administrators do") }
+            item {
+                SettingsGroup {
+                    if (list.isEmpty() && !loading) {
+                        ListItem(
+                            headlineContent = { Text("No commands available", style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text("Prosody and ejabberd expose their administration here when this account is an admin.") },
+                            leadingContent = { SettingsIconTile(Icons.Filled.Terminal, WardIconColors.grey) })
+                    } else {
+                        list.forEachIndexed { index, cmd ->
+                            if (index > 0) SettingsDivider()
+                            val prosody = cmd.node.contains("prosody")
+                            ListItem(
+                                headlineContent = { Text(cmd.name, style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = { Text(cmd.node, maxLines = 2) },
+                                leadingContent = {
+                                    SettingsIconTile(if (prosody) Icons.Filled.Extension else Icons.Filled.Terminal,
+                                        if (prosody) WardIconColors.purple else WardIconColors.blue)
+                                },
+                                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                                modifier = Modifier.clickable { command = cmd })
+                        }
+                    }
+                }
+            }
             }
         }
     }
+
     if (invite != null) {
         AlertDialog(onDismissRequest = { invite = null }, title = { Text("Invite") },
             text = { Column { Text("Send this link to the person you invite. It works once."); Spacer(Modifier.height(8.dp))
@@ -191,6 +254,42 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                 context.startActivity(Intent.createChooser(send, "Share invite"))
             }) { Text("Share") } })
     }
+}
+
+@Composable
+private fun ServerActionButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String,
+                               enabled: Boolean = true, onClick: () -> Unit) {
+    FilledIconButton(onClick = onClick, enabled = enabled, shape = CircleShape,
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = wardPanelColor(),
+            contentColor = MaterialTheme.colorScheme.onSurface),
+        modifier = Modifier.padding(start = 6.dp)) {
+        Icon(icon, label)
+    }
+}
+
+private fun statLabel(key: String): String = when (key) {
+    "registeredusersnum" -> "Registered users"
+    "onlineusersnum" -> "Online users"
+    "activeusersnum" -> "Active users"
+    "uptime" -> "Uptime"
+    else -> key
+}
+
+private fun statIcon(key: String): androidx.compose.ui.graphics.vector.ImageVector = when (key) {
+    "registeredusersnum" -> Icons.Filled.People
+    "onlineusersnum" -> Icons.Filled.Person
+    "activeusersnum" -> Icons.Filled.Bolt
+    "uptime" -> Icons.Filled.Schedule
+    else -> Icons.Filled.Analytics
+}
+
+private fun statColor(key: String): androidx.compose.ui.graphics.Color = when (key) {
+    "registeredusersnum" -> WardIconColors.blue
+    "onlineusersnum" -> WardIconColors.green
+    "activeusersnum" -> WardIconColors.cyan
+    "uptime" -> WardIconColors.orange
+    else -> WardIconColors.grey
 }
 
 private fun adminError(e: Throwable): String {
@@ -231,71 +330,153 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
         catch (e: Exception) { error = adminError(e) }
         busy = false
     }
-    Scaffold(topBar = { TopAppBar(title = { Text(command.name) }, navigationIcon = {
-        IconButton(onClick = { step?.let { svc?.cancel(it) }; onBack() }) { Icon(Icons.Filled.Close, null) }
-    }) }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(12.dp)) {
-            command.node.takeIf { it.contains("prosody") || it.startsWith("urn:") }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(command.name, style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    FilledIconButton(onClick = { step?.let { svc?.cancel(it) }; onBack() }, shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = wardPanelColor(),
+                            contentColor = MaterialTheme.colorScheme.onSurface)) {
+                        Icon(Icons.Filled.Close, "Cancel")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.background)
+            )
+        }
+    ) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState())
+            .navigationBarsPadding().padding(bottom = 30.dp)) {
+            SettingsSectionLabel("Command")
+            SettingsGroup {
+                ListItem(
+                    headlineContent = { Text(command.name, style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = { Text(command.node, maxLines = 2) },
+                    leadingContent = { SettingsIconTile(Icons.Filled.Terminal, WardIconColors.purple) })
             }
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            if (busy) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+            }
             if (error.isNotBlank()) {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                    Text(error, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                SettingsGroup {
+                    ListItem(
+                        headlineContent = { Text("Command failed", style = MaterialTheme.typography.titleMedium) },
+                        supportingContent = { Text(error) },
+                        leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
                 }
             }
+
             val s = step
             if (s != null) {
-                if (s.title.isNotBlank()) Text(s.title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp))
-                s.instructions.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                for (note in s.notes) {
-                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(
-                        containerColor = if (note.type == "error") MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant)) {
-                        Text(note.text, Modifier.padding(10.dp), style = MaterialTheme.typography.bodyMedium)
+                if (s.title.isNotBlank() || s.instructions.isNotEmpty() || s.notes.isNotEmpty()) {
+                    SettingsSectionLabel("Details")
+                    SettingsGroup {
+                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            if (s.title.isNotBlank()) {
+                                Text(s.title, style = MaterialTheme.typography.titleLarge)
+                                Spacer(Modifier.height(4.dp))
+                            }
+                            s.instructions.forEach { instruction ->
+                                Text(instruction, style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = 2.dp))
+                            }
+                            s.notes.forEach { note ->
+                                Spacer(Modifier.height(8.dp))
+                                Surface(
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = if (note.type == "error") MaterialTheme.colorScheme.errorContainer
+                                    else MaterialTheme.colorScheme.secondaryContainer,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(note.text, style = MaterialTheme.typography.bodyMedium,
+                                        color = if (note.type == "error") MaterialTheme.colorScheme.onErrorContainer
+                                        else MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.padding(12.dp))
+                                }
+                            }
+                        }
                     }
                 }
+
                 val visible = s.fields.filter { it.type != "hidden" }
                 if (visible.isNotEmpty()) {
-                    Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                        Column(Modifier.padding(12.dp)) {
-                            for (f in visible) AdminFieldView(f, values[f.varName] ?: emptyList()) { v -> values = values + (f.varName to v) }
+                    SettingsSectionLabel("Fields")
+                    SettingsGroup {
+                        visible.forEachIndexed { index, field ->
+                            if (index > 0) SettingsDivider()
+                            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                AdminFieldView(field, values[field.varName] ?: emptyList()) { value ->
+                                    values = values + (field.varName to value)
+                                }
+                            }
                         }
                     }
                 }
+
                 if (s.reported.isNotEmpty() && s.items.isNotEmpty()) {
-                    Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                        Column(Modifier.padding(8.dp)) {
-                            Row { s.reported.forEach { Text(it.label, Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 12.sp) } }
-                            HorizontalDivider()
+                    SettingsSectionLabel("Results")
+                    SettingsGroup {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                s.reported.forEach { column ->
+                                    Text(column.label, Modifier.weight(1f), fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                            SettingsDivider()
                             s.items.forEach { row ->
-                                Row { row.forEach { Text(it, Modifier.weight(1f), fontSize = 12.sp) } }
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                    row.forEach { cell ->
+                                        Text(cell, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
+
+                Spacer(Modifier.height(4.dp))
                 if (!s.finished) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if ("prev" in s.actions) OutlinedButton(onClick = {
-                            scope.launch { busy = true; runCatching { apply(svc!!.advance(s, "prev")) }.onFailure { error = it.message ?: "Failed" }; busy = false }
-                        }) { Text("Back") }
-                        Button(onClick = {
-                            val act = s.defaultAction.ifBlank { if ("next" in s.actions) "next" else "complete" }
-                            scope.launch {
-                                busy = true; error = ""
-                                try { withContext(Dispatchers.IO) { apply(svc!!.advance(s, act, values)) } }
-                                catch (e: Exception) { error = adminError(e) }
-                                busy = false
+                    SettingsGroup {
+                        Row(Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            if ("prev" in s.actions) {
+                                OutlinedButton(onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        runCatching { apply(svc!!.advance(s, "prev")) }
+                                            .onFailure { error = it.message ?: "Failed" }
+                                        busy = false
+                                    }
+                                }) { Text("Back") }
                             }
-                        }, enabled = !busy) {
-                            Text(when (s.defaultAction) { "next" -> "Next"; "complete" -> "Finish"; "execute" -> "Run"; else -> "Finish" })
+                            Button(onClick = {
+                                val act = s.defaultAction.ifBlank { if ("next" in s.actions) "next" else "complete" }
+                                scope.launch {
+                                    busy = true; error = ""
+                                    try { withContext(Dispatchers.IO) { apply(svc!!.advance(s, act, values)) } }
+                                    catch (e: Exception) { error = adminError(e) }
+                                    busy = false
+                                }
+                            }, enabled = !busy) {
+                                Text(when (s.defaultAction) { "next" -> "Next"; "complete" -> "Finish"; "execute" -> "Run"; else -> "Finish" })
+                            }
+                            TextButton(onClick = {
+                                scope.launch { busy = true; runCatching { svc?.cancel(s) }; busy = false; onBack() }
+                            }) { Text("Cancel") }
                         }
-                        TextButton(onClick = { scope.launch { busy = true; runCatching { svc?.cancel(s) }; busy = false; onBack() } }) { Text("Cancel") }
                     }
                 } else {
-                    Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done") }
-                    if (s.notes.isEmpty() && s.fields.isEmpty()) Text("Done", Modifier.padding(16.dp))
+                    SettingsGroup {
+                        Button(onClick = onBack, modifier = Modifier.fillMaxWidth().padding(16.dp)) { Text("Done") }
+                    }
                 }
             }
         }
@@ -384,7 +565,10 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
             runCatching { listState.scrollToItem(filteredLog.lastIndex) }
         }
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("XML console") }, navigationIcon = { WardBackButton(onBack) },
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = { TopAppBar(title = { Text("XML console", style = MaterialTheme.typography.headlineSmall) }, navigationIcon = { WardBackButton(onBack) },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background),
         actions = {
             IconButton(onClick = {
                 paused = !paused
@@ -411,11 +595,14 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
                 frozen = emptyList()
             }) { Icon(Icons.Filled.DeleteSweep, "Clear") }
         }) }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
-            if (accounts.size > 1) Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.fillMaxSize().padding(pad).navigationBarsPadding()) {
+            if (accounts.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 accounts.forEach { a -> FilterChip(selected = accountId == a.id, onClick = { accountId = a.id }, label = { Text(a.domain) }) }
             }
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(8.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                 itemsIndexed(filteredLog, key = { i, e -> "$i:${e.time}:${e.text.hashCode()}" }) { i, e ->
                     Text((if (e.incoming) "← " else "→ ") + e.text, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                         color = if (e.incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -425,11 +612,23 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
                         })
                 }
             }
-            OutlinedTextField(text, { text = it }, label = { Text("Raw stanza XML") }, minLines = 2, maxLines = 5,
-                modifier = Modifier.fillMaxWidth().padding(8.dp), textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-            Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                Button(onClick = { error = if (vm.core.sendRawXml(accountId, text)) "" else "Could not send the stanza"; text = "" }) { Text("Send") }
-                if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 10.dp))
+            SettingsGroup {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    OutlinedTextField(text, { text = it }, label = { Text("Raw stanza XML") }, minLines = 2, maxLines = 5,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = {
+                            error = if (vm.core.sendRawXml(accountId, text)) "" else "Could not send the stanza"
+                            text = ""
+                        }) { Text("Send") }
+                        if (error.isNotBlank()) {
+                            Text(error, color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(start = 10.dp))
+                        }
+                    }
+                }
             }
         }
     }
@@ -457,34 +656,96 @@ fun DiscoPage(vm: AppViewModel, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(Unit) { query() }
-    Scaffold(topBar = { TopAppBar(title = { Text("Service discovery") }, navigationIcon = { WardBackButton(onBack) }) }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(12.dp)) {
-            OutlinedTextField(jid, { jid = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-            Row(Modifier.padding(vertical = 6.dp)) { Button(onClick = { query() }, enabled = !busy) { Text("Query") } }
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-            val discoverInfo: org.jivesoftware.smackx.disco.packet.DiscoverInfo? = info
-            if (discoverInfo != null) {
-                Text("Identities", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(vertical = 6.dp))
-                for (id in discoverInfo.identities) {
-                    ListItem(headlineContent = { Text("${id.category} / ${id.type}") },
-                        supportingContent = { if (id.name.isNotBlank()) Text(id.name) })
-                }
-                Text("Features", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(vertical = 6.dp))
-                for (f in discoverInfo.features.map { it.getVar() }.sorted()) {
-                    Text(f, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.padding(vertical = 2.dp))
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
+        TopAppBar(title = { Text("Service discovery", style = MaterialTheme.typography.headlineSmall) },
+            navigationIcon = { WardBackButton(onBack) },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.background,
+                scrolledContainerColor = MaterialTheme.colorScheme.background))
+    }) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState())
+            .navigationBarsPadding().padding(bottom = 30.dp)) {
+            SettingsSectionLabel("Query")
+            SettingsGroup {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    OutlinedTextField(jid, { jid = it }, label = { Text("Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                    Spacer(Modifier.height(10.dp))
+                    Button(onClick = { query() }, enabled = !busy) { Text("Query") }
                 }
             }
-            items?.let { i ->
-                Text("Items", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(vertical = 6.dp))
-                i.items.forEach { it2 ->
-                    ListItem(headlineContent = { Text(it2.entityID.toString()) },
-                        supportingContent = it2.node?.let { n -> { Text(n) } },
-                        modifier = Modifier.clickable { jid = it2.entityID.toString(); query() })
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp))
+            if (error.isNotBlank()) {
+                SettingsGroup {
+                    ListItem(
+                        headlineContent = { Text("Could not query the service", style = MaterialTheme.typography.titleMedium) },
+                        supportingContent = { Text(error) },
+                        leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
+                }
+            }
+            val discoverInfo: org.jivesoftware.smackx.disco.packet.DiscoverInfo? = info
+            if (discoverInfo != null) {
+                SettingsSectionLabel("Identities")
+                SettingsGroup {
+                    val identities = discoverInfo.identities
+                    if (identities.isEmpty()) {
+                        ListItem(
+                            headlineContent = { Text("No identities reported", style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text("The server did not describe what this address is.") },
+                            leadingContent = { SettingsIconTile(Icons.Filled.Info, WardIconColors.grey) })
+                    } else {
+                        identities.forEachIndexed { index, identity ->
+                            if (index > 0) SettingsDivider()
+                            ListItem(
+                                headlineContent = { Text("${identity.category} / ${identity.type}",
+                                    style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = if (identity.name.isNotBlank()) ({
+                                    Text(identity.name)
+                                }) else null,
+                                leadingContent = { SettingsIconTile(Icons.Filled.Info, WardIconColors.blue) })
+                        }
+                    }
+                }
+
+                SettingsSectionLabel("Features")
+                SettingsGroup {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        val features = discoverInfo.features.map { it.getVar() }.sorted()
+                        if (features.isEmpty()) {
+                            Text("No features reported", style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            features.forEach { feature ->
+                                Text(feature, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(vertical = 3.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            items?.let { itemsResult ->
+                SettingsSectionLabel("Items")
+                SettingsGroup {
+                    if (itemsResult.items.isEmpty()) {
+                        ListItem(
+                            headlineContent = { Text("No items reported", style = MaterialTheme.typography.titleMedium) },
+                            leadingContent = { SettingsIconTile(Icons.Filled.Dns, WardIconColors.grey) })
+                    } else {
+                        itemsResult.items.forEachIndexed { index, item ->
+                            if (index > 0) SettingsDivider()
+                            ListItem(
+                                headlineContent = { Text(item.entityID.toString(), style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = item.node?.let { node -> { Text(node) } },
+                                leadingContent = { SettingsIconTile(Icons.Filled.Dns, WardIconColors.teal) },
+                                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                                modifier = Modifier.clickable {
+                                    jid = item.entityID.toString()
+                                    query()
+                                })
+                        }
+                    }
                 }
             }
         }

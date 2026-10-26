@@ -189,6 +189,9 @@ fun ChatScreen(vm: AppViewModel) {
             // under the status bar. A Column keeps them stacked and lets Scaffold measure both.
             Column(Modifier.fillMaxWidth()) {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.background),
                 navigationIcon = { WardBackButton { vm.selectChat(null) } },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { details = true }) {
