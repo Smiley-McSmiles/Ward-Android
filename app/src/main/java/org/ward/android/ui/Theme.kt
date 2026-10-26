@@ -61,12 +61,12 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
         // Material 3's dark baseline, with the selected accent lightened for text and controls.
         val primary = tint(accent, Color.White, 0.45f)
         val onPrimary = Color(0xFF1C1B1F)
-        val background = Color(0xFF1C1B1F)
+        val background = Color(0xFF221E28)
         // ListItem paints this role behind every row. Keep it on the elevated panel tone so
         // cards read as two distinct layers instead of disappearing into the page background.
-        val surface = Color(0xFF2B2930)
-        val surfaceContainer = Color(0xFF2B2930)
-        val surfaceVariant = Color(0xFF49454F)
+        val surface = Color(0xFF3C3742)
+        val surfaceContainer = Color(0xFF3C3742)
+        val surfaceVariant = Color(0xFF514B5B)
         darkColorScheme(
             primary = primary,
             onPrimary = onPrimary,
@@ -94,16 +94,16 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
             onError = Color(0xFF601410),
             errorContainer = Color(0xFF8C1D18),
             onErrorContainer = Color(0xFFF9DEDC),
-            outline = Color(0xFF938F99),
-            outlineVariant = Color(0xFF49454F),
+            outline = Color(0xFF9A93A3),
+            outlineVariant = Color(0xFF55505D),
             scrim = Color.Black,
-            surfaceBright = Color(0xFF3B383E),
-            surfaceDim = Color(0xFF141218),
-            surfaceContainerLowest = Color(0xFF0F0D13),
-            surfaceContainerLow = Color(0xFF211F26),
+            surfaceBright = Color(0xFF4A4551),
+            surfaceDim = Color(0xFF221E28),
+            surfaceContainerLowest = Color(0xFF1A1720),
+            surfaceContainerLow = Color(0xFF322E3A),
             surfaceContainer = surfaceContainer,
-            surfaceContainerHigh = Color(0xFF36343B),
-            surfaceContainerHighest = Color(0xFF3B383E)
+            surfaceContainerHigh = Color(0xFF4A4551),
+            surfaceContainerHighest = Color(0xFF554F5D)
         )
     } else {
         val background = Color(0xFFF6F6FA)
