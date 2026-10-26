@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -48,18 +49,27 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
             when (b) {
                 is Block.Code -> {
                     val context = LocalContext.current
-                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp),
+                    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                    val palette = remember(dark) { highlightPalette(dark) }
+                    val code = b.text.trimEnd()
+                    val highlighted = remember(code, b.lang, dark) { highlightCode(code, b.lang, palette) }
+                    val language = b.lang.trim().substringBefore(' ').substringBefore('{').ifBlank { "code" }
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-                            verticalAlignment = Alignment.Top) {
-                            Text(b.text.trimEnd(), fontFamily = FontFamily.Monospace, fontSize = 13.sp,
-                                modifier = Modifier.weight(1f).padding(vertical = 6.dp).bubbleLongPress(onLongPress), color = color)
-                            IconButton(onClick = {
-                                context.copyText(b.text)
-                                android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
-                            }) {
-                                Icon(Icons.Filled.ContentCopy, "Copy code")
+                        Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 4.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(language.uppercase(), style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                                    modifier = Modifier.weight(1f).padding(top = 4.dp))
+                                IconButton(onClick = {
+                                    context.copyText(code)
+                                    android.widget.Toast.makeText(context, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
+                                }) { Icon(Icons.Filled.ContentCopy, "Copy code") }
                             }
+                            Text(highlighted, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                                color = palette.plain,
+                                modifier = Modifier.fillMaxWidth().padding(end = 6.dp, bottom = 6.dp)
+                                    .bubbleLongPress(onLongPress))
                         }
                     }
                 }
@@ -321,3 +331,28 @@ private fun appendInline(b: AnnotatedString.Builder, src: String, base: SpanStyl
         i++
     }
 }
+
+
+private fun highlightPalette(dark: Boolean): HighlightPalette = if (dark) HighlightPalette(
+    plain = Color(0xFFE6E1E5),
+    keyword = Color(0xFFC9B6F5),
+    string = Color(0xFFA6E6A0),
+    comment = Color(0xFF9A94A4),
+    number = Color(0xFFF4BE86),
+    function = Color(0xFFA8C7FA),
+    type = Color(0xFF9DE0D2),
+    tag = Color(0xFFF2A6A0),
+    attribute = Color(0xFFF2D06B),
+    punctuation = Color(0xFFCAC4D0)
+) else HighlightPalette(
+    plain = Color(0xFF1A1B20),
+    keyword = Color(0xFF7B3FA0),
+    string = Color(0xFF1E7A3C),
+    comment = Color(0xFF6E6A75),
+    number = Color(0xFFA65D00),
+    function = Color(0xFF1A5FB4),
+    type = Color(0xFF006A60),
+    tag = Color(0xFFB3261E),
+    attribute = Color(0xFF8A5A00),
+    punctuation = Color(0xFF46464F)
+)

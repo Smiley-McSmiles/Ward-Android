@@ -7,9 +7,13 @@ import org.jivesoftware.smack.packet.StandardExtensionElement
 import org.jivesoftware.smack.util.PacketParserUtils
 import org.junit.Assert.*
 import org.junit.Test
+import androidx.compose.ui.graphics.Color
 import org.ward.android.data.SettingsSchema
+import org.ward.android.ui.HighlightPalette
+import org.ward.android.ui.highlightCode
 import org.ward.android.ui.shouldAutoDownload
 import org.ward.android.util.FileCrypto
+import androidx.compose.ui.text.AnnotatedString
 import org.ward.android.xmpp.ExternalServicesIq
 import org.ward.android.xmpp.JingleIqs
 import org.ward.android.xmpp.Omemo2
@@ -24,6 +28,27 @@ import org.ward.android.xmpp.guessMime
 import java.io.File
 
 class CoreTests {
+    @Test fun syntaxHighlightingMarksKotlinAndXmlTokens() {
+        val palette = HighlightPalette(
+            plain = Color.Black, keyword = Color.Red, string = Color.Green, comment = Color.Gray,
+            number = Color.Yellow, function = Color.Blue, type = Color.Cyan,
+            tag = Color.Magenta, attribute = Color.DarkGray, punctuation = Color.LightGray
+        )
+        val kotlin = highlightCode("fun main() {\n  val s = \"hi\" // note\n}", "kotlin", palette)
+        fun AnnotatedString.has(text: String, color: Color): Boolean = spanStyles.any {
+            it.item.color == color && it.start < it.end && substring(it.start, it.end) == text
+        }
+        assertTrue(kotlin.has("fun", palette.keyword))
+        assertTrue(kotlin.has("val", palette.keyword))
+        assertTrue(kotlin.has("\"hi\"", palette.string))
+        assertTrue(kotlin.has("// note", palette.comment))
+
+        val xml = highlightCode("<tag attr=\"x\">value</tag>", "xml", palette)
+        assertTrue(xml.has("tag", palette.tag))
+        assertTrue(xml.has("attr", palette.attribute))
+        assertTrue(xml.has("\"x\"", palette.string))
+    }
+
     @Test fun unknownAttachmentSizeDoesNotAutoDownloadOnMeteredConnections() {
         val oneMiB = 1024L * 1024L
         assertFalse(shouldAutoDownload(false, false, 0L, oneMiB, false))
