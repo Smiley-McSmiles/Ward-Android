@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -174,7 +175,11 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
         LocalDensity provides Density(baseDensity.density, baseDensity.fontScale * textScale),
         LocalAvatarShapeRounded provides (settingsState["appearance.avatar_shape"] == "rounded")
     ) {
-        MaterialTheme(colorScheme = colors, typography = typography, shapes = shapes, content = content)
+        MaterialTheme(colorScheme = colors, typography = typography, shapes = shapes) {
+            // Screens draw on a raw background rather than a Surface. Without this, unstyled Text
+            // falls back to Compose's default black content colour and disappears in dark mode.
+            CompositionLocalProvider(LocalContentColor provides colors.onBackground, content = content)
+        }
     }
 }
 
