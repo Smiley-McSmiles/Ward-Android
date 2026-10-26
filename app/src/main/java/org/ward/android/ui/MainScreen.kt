@@ -70,6 +70,25 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
     var resyncingHistory by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedChatIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var confirmDeleteSelection by remember { mutableStateOf(false) }
+    val selectedChats = chats.filter { it.id in selectedChatIds }
+    fun clearChatSelection() {
+        selectionMode = false
+        selectedChatIds = emptySet()
+    }
+    fun startChatSelection(id: Long) {
+        searchMode = false
+        search = ""
+        selectedChatIds = setOf(id)
+        selectionMode = true
+    }
+    fun toggleChatSelection(id: Long) {
+        val next = if (id in selectedChatIds) selectedChatIds - id else selectedChatIds + id
+        selectedChatIds = next
+        selectionMode = next.isNotEmpty()
+    }
     LaunchedEffect(accounts) {
         if (accountFilter != null && accounts.none { it.id == accountFilter }) accountFilter = null
     }
@@ -79,6 +98,10 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     val hasAdmin = accounts.any { it.isAdmin }
     BackHandler(enabled = screen != "chats" && !showChat) { screen = "chats" }
     BackHandler(enabled = searchMode) { searchMode = false; search = "" }
+    BackHandler(enabled = selectionMode) { clearChatSelection() }
+    LaunchedEffect(filter, showArchived, accountFilter) {
+        if (selectionMode) clearChatSelection()
+    }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     AnimatedContent(targetState = screen,
         transitionSpec = {
@@ -94,6 +117,32 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                 containerColor = MaterialTheme.colorScheme.background,
                 snackbarHost = { WardSnackbarHost(snackbar) },
                 topBar = {
+                    if (selectionMode) {
+                        SelectionTopBar(
+                            count = selectedChatIds.size,
+                            archivedView = showArchived,
+                            onClose = { clearChatSelection() },
+                            onArchive = {
+                                val targets = selectedChats
+                                val archive = !showArchived
+                                vm.setArchivedAll(targets, archive) {
+                                    clearChatSelection()
+                                    uiScope.launch {
+                                        snackbar.showSnackbar(
+                                            (if (archive) "Archived " else "Unarchived ") + chatCount(targets.size))
+                                    }
+                                }
+                            },
+                            onRead = {
+                                val targets = selectedChats
+                                vm.markReadAll(targets) {
+                                    clearChatSelection()
+                                    uiScope.launch { snackbar.showSnackbar("Marked ${chatCount(targets.size)} as read") }
+                                }
+                            },
+                            onDelete = { confirmDeleteSelection = true }
+                        )
+                    } else {
                     TopAppBar(colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
                         scrolledContainerColor = MaterialTheme.colorScheme.background), title = {
@@ -178,21 +227,28 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                             }
                         }
                     })
+                    }
                 }
             ) { pad ->
                 Box(Modifier.fillMaxSize()) {
-                    ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it }, showArchived, { showArchived = it }, accountFilter, pad,
-                        searchMode, onCloseSearch = { searchMode = false; search = "" }, onNewChat = { dialog = "new" })
-                    if (hasAdmin) {
-                        SmallFloatingActionButton(onClick = { screen = "server" }, shape = CircleShape,
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(18.dp)) {
-                            Icon(Icons.Filled.Dns, "Server administration")
+                    ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it },
+                        showArchived, { showArchived = it }, accountFilter, pad, searchMode,
+                        onCloseSearch = { searchMode = false; search = "" }, onNewChat = { dialog = "new" },
+                        selectionMode = selectionMode, selectedChatIds = selectedChatIds,
+                        onToggleSelect = { toggleChatSelection(it) },
+                        onLongSelect = { startChatSelection(it) })
+                    if (!selectionMode) {
+                        if (hasAdmin) {
+                            SmallFloatingActionButton(onClick = { screen = "server" }, shape = CircleShape,
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(18.dp)) {
+                                Icon(Icons.Filled.Dns, "Server administration")
+                            }
                         }
-                    }
-                    FloatingActionButton(onClick = { addSheet = true }, shape = CircleShape,
-                        modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(18.dp)) {
-                        Icon(Icons.Filled.Add, "New message or contact")
+                        FloatingActionButton(onClick = { addSheet = true }, shape = CircleShape,
+                            modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(18.dp)) {
+                            Icon(Icons.Filled.Add, "New message or contact")
+                        }
                     }
                 }
             }
@@ -210,10 +266,29 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
             }) { Text("Connect") } },
             dismissButton = { TextButton(onClick = { passwordFor = null }) { Text("Cancel") } })
     }
+    if (confirmDeleteSelection) {
+        val count = selectedChatIds.size
+        AlertDialog(
+            onDismissRequest = { confirmDeleteSelection = false },
+            title = { Text("Delete ${chatCount(count)}?") },
+            text = { Text("This clears local history and removes the selected chats from the list. " +
+                "They will reappear if someone sends a new message. Messages on the server are not deleted.") },
+            confirmButton = {
+                TextButton(enabled = count > 0, onClick = {
+                    val targets = selectedChats
+                    confirmDeleteSelection = false
+                    vm.deleteChats(targets) {
+                        clearChatSelection()
+                        uiScope.launch { snackbar.showSnackbar("Deleted ${chatCount(targets.size)}") }
+                    }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteSelection = false }) { Text("Cancel") } })
+    }
     AnimatedVisibility(visible = showChat,
         enter = slideInHorizontally(animationSpec = tween(170)) { it / 4 } + fadeIn(tween(120)),
         exit = ExitTransition.None, label = "chat") {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { ChatScreen(vm) }
+        Box(Modifier.fillMaxSize()) { ChatScreen(vm) }
     }
     }
     if (!showChat) when (dialog) {
@@ -268,7 +343,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
              states: Map<Long, ConnectionState>, search: String, setSearch: (String) -> Unit,
              filter: String, setFilter: (String) -> Unit, archived: Boolean, setArchived: (Boolean) -> Unit,
              accountFilter: Long?, pad: PaddingValues, searchMode: Boolean, onCloseSearch: () -> Unit,
-             onNewChat: () -> Unit) {
+             onNewChat: () -> Unit, selectionMode: Boolean = false, selectedChatIds: Set<Long> = emptySet(),
+             onToggleSelect: (Long) -> Unit = {}, onLongSelect: (Long) -> Unit = {}) {
     val accounts by vm.accounts.collectAsState()
     val contacts by vm.contacts.collectAsState()
     val settings by vm.settings.state.collectAsState()
@@ -359,7 +435,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                 items(visible, key = { it.id }) { chat ->
                     val dismiss = rememberSwipeToDismissBoxState(
                         confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
+                            if (selectionMode) false
+                            else if (value == SwipeToDismissBoxValue.EndToStart) {
                                 vm.setArchived(chat, !archived)
                                 true
                             } else false
@@ -368,6 +445,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                     SwipeToDismissBox(
                         state = dismiss,
                         enableDismissFromStartToEnd = false,
+                        enableDismissFromEndToStart = !selectionMode,
+                        gesturesEnabled = !selectionMode,
                         backgroundContent = {
                             Box(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 3.dp)
                                 .clip(RoundedCornerShape(20.dp))
@@ -383,12 +462,20 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                             it.accountId == chat.accountId && it.jid == chat.jid
                         }?.avatar.orEmpty()
                         val avatarMode = settings["appearance.avatars"] ?: "always"
-                        ChatRow(chat, typing[chat.id] ?: "", onClick = { vm.selectChat(chat.id) },
+                        val isSelected = chat.id in selectedChatIds
+                        ChatRow(chat, typing[chat.id] ?: "", onClick = {
+                            if (selectionMode) onToggleSelect(chat.id) else vm.selectChat(chat.id)
+                        },
                             modifier = Modifier,
                             photo = chat.avatar.ifBlank { contactPhoto },
                             showPreview = settings["appearance.list_previews"] != "false",
                             compact = settings["appearance.list_density"] == "compact",
-                            showAvatar = avatarMode == "always" || (avatarMode == "groups" && chat.isGroup))
+                            showAvatar = avatarMode == "always" || (avatarMode == "groups" && chat.isGroup),
+                            selectionMode = selectionMode,
+                            selected = isSelected,
+                            onLongClick = {
+                                if (selectionMode) onToggleSelect(chat.id) else onLongSelect(chat.id)
+                            })
                     }
                 }
             }
@@ -735,4 +822,40 @@ fun JoinGroupDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss:
             if (JidUtil.valid(j) && accountId != 0L) { vm.openChat(accountId, j, "groupchat"); onDismiss() }
         }) { Text("Join") }
     }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+
+private fun chatCount(count: Int): String = if (count == 1) "1 chat" else "$count chats"
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectionTopBar(
+    count: Int,
+    archivedView: Boolean,
+    onClose: () -> Unit,
+    onArchive: () -> Unit,
+    onRead: () -> Unit,
+    onDelete: () -> Unit
+) {
+    TopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background),
+        navigationIcon = {
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Exit selection") }
+        },
+        title = { Text("$count selected", style = MaterialTheme.typography.titleLarge) },
+        actions = {
+            IconButton(enabled = count > 0, onClick = onArchive) {
+                Icon(if (archivedView) Icons.Filled.Unarchive else Icons.Filled.Archive,
+                    if (archivedView) "Unarchive selected chats" else "Archive selected chats")
+            }
+            IconButton(enabled = count > 0, onClick = onRead) {
+                Icon(Icons.Outlined.Visibility, "Mark selected chats as read")
+            }
+            IconButton(enabled = count > 0, onClick = onDelete) {
+                Icon(Icons.Filled.Delete, "Delete selected chats", tint = MaterialTheme.colorScheme.error)
+            }
+        }
+    )
 }

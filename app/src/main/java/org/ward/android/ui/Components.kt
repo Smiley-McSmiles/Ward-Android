@@ -1,13 +1,16 @@
 package org.ward.android.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
@@ -173,6 +176,7 @@ fun WardSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatRow(
     chat: ChatEntity,
@@ -183,13 +187,18 @@ fun ChatRow(
     compact: Boolean = false,
     showAvatar: Boolean = true,
     showTimestamp: Boolean = true,
-    photo: String = chat.avatar
+    photo: String = chat.avatar,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val twelveHour = TimeUtil.twelveHour(context, LocalTimeFormat.current)
-    Surface(onClick = onClick, shape = RoundedCornerShape(20.dp),
-        color = wardPanelColor(), tonalElevation = 0.dp,
-        modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (compact) 1.dp else 3.dp)) {
+    Surface(shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else wardPanelColor(),
+        tonalElevation = 0.dp,
+        modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (compact) 1.dp else 3.dp)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         PanelListItem(
             modifier = Modifier,
             leadingContent = if (showAvatar) ({ Avatar(chat.displayName, 44, photo = photo) }) else null,
@@ -222,7 +231,11 @@ fun ChatRow(
                     }
                 }
             }) else null,
-            trailingContent = null
+            trailingContent = if (selectionMode) ({
+                Icon(if (selected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                    if (selected) "Selected" else "Not selected",
+                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }) else null
         )
     }
 }

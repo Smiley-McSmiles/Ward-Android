@@ -8,6 +8,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.shrinkVertically
@@ -16,6 +18,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
@@ -47,9 +51,12 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -60,6 +67,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
@@ -88,6 +96,15 @@ fun ChatScreen(vm: AppViewModel) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val maxSwipe = with(LocalDensity.current) { configuration.screenWidthDp.dp.toPx() }
+    var swipeOffset by remember { mutableFloatStateOf(0f) }
+    fun closeChatAnimated() {
+        scope.launch {
+            animate(swipeOffset, maxSwipe, animationSpec = tween(220)) { value, _ -> swipeOffset = value }
+            vm.selectChat(null)
+        }
+    }
     var searchMode by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
@@ -146,9 +163,10 @@ fun ChatScreen(vm: AppViewModel) {
         else callPermission.launch(missing.toTypedArray())
     }
     BackHandler {
-        if (searchMode) searchMode = false else if (selectedMessage != null) selectedMessage = null else vm.selectChat(null)
+        if (searchMode) searchMode = false else if (selectedMessage != null) selectedMessage = null else closeChatAnimated()
     }
     LaunchedEffect(c.id) {
+        swipeOffset = 0f
         vm.selectChat(c.id)
         if (c.isGroup && !c.joined) vm.core.session(c.accountId)?.joinRoom(c)
         if (vm.settings.bool("pgp.enabled")) {
@@ -182,7 +200,8 @@ fun ChatScreen(vm: AppViewModel) {
     }
     val filtered = if (search.isBlank()) messages else messages.filter { it.body.contains(search, true) }
     Scaffold(
-        modifier = Modifier.fillMaxSize().imePadding(),
+        modifier = Modifier.fillMaxSize().imePadding()
+            .offset { IntOffset(swipeOffset.roundToInt(), 0) },
         topBar = {
             // Scaffold expects a single top-bar composable. Emitting the app bar and the search
             // field as siblings makes Scaffold place both at y=0, which hides the search field
@@ -192,7 +211,7 @@ fun ChatScreen(vm: AppViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     scrolledContainerColor = MaterialTheme.colorScheme.background),
-                navigationIcon = { WardBackButton { vm.selectChat(null) } },
+                navigationIcon = { WardBackButton { closeChatAnimated() } },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { details = true }) {
                         Avatar(c.displayName, 34, photo = if (c.isGroup) c.avatar else contact?.avatar ?: c.avatar,
@@ -317,20 +336,62 @@ fun ChatScreen(vm: AppViewModel) {
                     }
                 }
             }
-            if (filtered.isEmpty()) {
-                EmptyState(Icons.Outlined.ChatBubbleOutline, "No messages yet", "Say hello!")
-            } else {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    itemsIndexed(filtered, key = { _, m -> m.id }) { index, m ->
-                        val prev = if (index > 0) filtered[index - 1] else null
-                        if (prev == null || TimeUtil.day(prev.timestamp) != TimeUtil.day(m.timestamp)) {
-                            Text(TimeUtil.day(m.timestamp), modifier = Modifier.fillMaxWidth().padding(10.dp),
-                                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Box(
+                Modifier.weight(1f).fillMaxWidth()
+                    .pointerInput(maxSwipe) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = true)
+                            var dragging = false
+                            var totalX = 0f
+                            var totalY = 0f
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                val delta = change.positionChange()
+                                totalX += delta.x
+                                totalY += delta.y
+                                if (!dragging) {
+                                    if (abs(totalY) > viewConfiguration.touchSlop &&
+                                        abs(totalY) > abs(totalX)) break
+                                    if (totalX > viewConfiguration.touchSlop && totalX > abs(totalY)) {
+                                        dragging = true
+                                        change.consume()
+                                    }
+                                }
+                                if (dragging) {
+                                    change.consume()
+                                    swipeOffset = (swipeOffset + delta.x).coerceIn(0f, maxSwipe)
+                                }
+                            }
+                            if (dragging) {
+                                val shouldClose = swipeOffset > maxSwipe * 0.28f
+                                val target = if (shouldClose) maxSwipe else 0f
+                                scope.launch {
+                                    animate(swipeOffset, target, animationSpec = tween(220)) { value, _ ->
+                                        swipeOffset = value
+                                    }
+                                    if (shouldClose) vm.selectChat(null)
+                                }
+                            }
                         }
-                        MessageItemRow(vm, c, m, prev, contact, modifier = Modifier,
-                            onLongPress = { selectedMessage = m },
-                            onReply = { replyTo = m; editing = null }, onReact = { vm.react(m, it) })
+                    }
+            ) {
+                if (filtered.isEmpty()) {
+                    EmptyState(Icons.Outlined.ChatBubbleOutline, "No messages yet", "Say hello!")
+                } else {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+                        itemsIndexed(filtered, key = { _, m -> m.id }) { index, m ->
+                            val prev = if (index > 0) filtered[index - 1] else null
+                            if (prev == null || TimeUtil.day(prev.timestamp) != TimeUtil.day(m.timestamp)) {
+                                Text(TimeUtil.day(m.timestamp), modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            }
+                            MessageItemRow(vm, c, m, prev, contact, modifier = Modifier,
+                                onLongPress = { selectedMessage = m },
+                                onReply = { replyTo = m; editing = null }, onReact = { vm.react(m, it) })
+                        }
                     }
                 }
             }

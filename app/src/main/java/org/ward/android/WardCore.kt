@@ -302,8 +302,8 @@ class WardCore private constructor(val context: Context) {
         }
     }
 
-    suspend fun markRead(chat: ChatEntity) {
-        if (!isChatActive(chat.id)) return
+    suspend fun markRead(chat: ChatEntity, force: Boolean = false) {
+        if (!force && !isChatActive(chat.id)) return
         notificationDismissSink?.invoke(chat.id)
         val msgs = dao.messagesNow(chat.id, 500)
         val lastIn = msgs.lastOrNull { it.direction == 0 }
@@ -341,6 +341,16 @@ class WardCore private constructor(val context: Context) {
         dao.clearMessages(chat.id)
         dao.updateChat(chat.copy(open = false, clearedAt = System.currentTimeMillis(), lastActivity = System.currentTimeMillis(),
             preview = "", previewSender = "", unread = 0, mentions = 0, lastReadId = 0))
+    }
+
+    /** Remove selected chats from the local list while keeping contacts, groups and server history. */
+    suspend fun deleteChat(chat: ChatEntity) {
+        notificationDismissSink?.invoke(chat.id)
+        dao.clearMessages(chat.id)
+        if (chat.isRequest) dao.deleteRequest(chat.accountId, chat.jid)
+        dao.updateChat(chat.copy(open = false, archived = false, pinned = false, isRequest = false,
+            draft = "", preview = "", previewSender = "", unread = 0, mentions = 0,
+            lastActivity = System.currentTimeMillis(), lastReadId = 0, clearedAt = System.currentTimeMillis()))
     }
 
     suspend fun setContactPresence(accountId: Long, jid: String, presence: String, status: String) {

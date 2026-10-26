@@ -177,6 +177,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setPinned(chat: ChatEntity, pinned: Boolean) = viewModelScope.launch { core.setPinned(chat, pinned) }
     fun setMuted(chat: ChatEntity, until: Long) = viewModelScope.launch { core.setMuted(chat, until) }
     fun setArchived(chat: ChatEntity, archived: Boolean) = viewModelScope.launch { core.setArchived(chat, archived) }
+    fun setArchivedAll(chats: List<ChatEntity>, archived: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
+        chats.forEach { core.setArchived(it, archived) }
+        onDone()
+    }
+    fun markReadAll(chats: List<ChatEntity>, onDone: () -> Unit = {}) = viewModelScope.launch {
+        chats.forEach { core.markRead(it, force = true) }
+        onDone()
+    }
+    fun deleteChats(chats: List<ChatEntity>, onDone: () -> Unit = {}) = viewModelScope.launch {
+        chats.forEach { core.deleteChat(it) }
+        if (chats.any { it.id == _selectedChat.value }) selectChat(null)
+        onDone()
+    }
     fun setEncryption(chat: ChatEntity, value: String) = viewModelScope.launch { core.setEncryption(chat, value) }
     fun setNotify(chat: ChatEntity, value: String) = viewModelScope.launch { core.setNotify(chat, value) }
     fun clearHistory(chat: ChatEntity) = viewModelScope.launch { core.clearHistory(chat) }
