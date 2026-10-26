@@ -140,6 +140,7 @@ class WardService : Service() {
         val body = when {
             content == "nothing" -> "New message"
             content == "sender" || (core.settings.bool("notify.hide_encrypted") && msg.encryption.isNotBlank()) -> "New message"
+            msg.kind == "me" -> msg.body.removePrefix("/me ").trimStart()
             else -> msg.body
         }
         val intent = Intent(this, MainActivity::class.java).apply { putExtra("openChatId", chat.id) }

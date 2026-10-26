@@ -470,7 +470,21 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                             Spacer(Modifier.height(4.dp))
                         }
                         val attachmentNames = atts.mapNotNull { it["name"] as? String }
-                        if (m.body.isNotBlank() && m.body !in attachmentNames) {
+                        if (m.kind == "me") {
+                            val action = m.body.removePrefix("/me ").trimStart()
+                            if (action.isNotBlank()) {
+                                val actionName = m.senderName.ifBlank { name }
+                                Row(Modifier.padding(vertical = 1.dp)) {
+                                    Text(actionName,
+                                        color = if (outgoing) MaterialTheme.colorScheme.primary
+                                        else parseColor(Colors.forJid(m.senderJid.ifBlank { m.sender })),
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                        fontWeight = FontWeight.SemiBold)
+                                    Text(" $action", color = MaterialTheme.colorScheme.onSurface,
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                                }
+                            }
+                        } else if (m.body.isNotBlank() && m.body !in attachmentNames) {
                             MarkdownText(m.body, largeEmoji = vm.settings.bool("appearance.large_emoji"),
                                 onLongPress = onLongPress)
                         }
@@ -478,7 +492,6 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                             Text(m.error, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
                                 modifier = Modifier.padding(top = 3.dp))
                         }
-                        if (m.kind == "me") { /* already rendered with /me prefix */ }
                     }
                     Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (m.edited) Text("edited", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

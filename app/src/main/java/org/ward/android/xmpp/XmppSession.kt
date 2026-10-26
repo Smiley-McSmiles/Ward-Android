@@ -1084,7 +1084,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         val start = b?.getAttributeValue("start")?.toIntOrNull() ?: 0
         val end = b?.getAttributeValue("end")?.toIntOrNull() ?: 0
         val quote = if (end > start && end <= body.length) body.substring(start, end) else body.lineSequence().takeWhile { it.startsWith(">") }.joinToString("\n")
-        return quote.lines().joinToString("\n") { it.removePrefix("> ").removePrefix(">") }.trim()
+        return quote.lines().joinToString("\n") { it.removePrefix("> ").removePrefix(">") }
+            .trim().removePrefix("/me ").trimStart()
     }
 
     private fun String.stripReplyQuote(reply: org.jivesoftware.smack.packet.StandardExtensionElement?): String {

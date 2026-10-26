@@ -62,7 +62,9 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
         val primary = tint(accent, Color.White, 0.45f)
         val onPrimary = Color(0xFF1C1B1F)
         val background = Color(0xFF1C1B1F)
-        val surface = Color(0xFF1C1B1F)
+        // ListItem paints this role behind every row. Keep it on the elevated panel tone so
+        // cards read as two distinct layers instead of disappearing into the page background.
+        val surface = Color(0xFF2B2930)
         val surfaceContainer = Color(0xFF2B2930)
         val surfaceVariant = Color(0xFF49454F)
         darkColorScheme(
@@ -105,7 +107,8 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
         )
     } else {
         val background = Color(0xFFF6F6FA)
-        val surface = Color(0xFFFCFCFF)
+        // Match the panel tone so ListItem rows and settings cards stay on one surface.
+        val surface = Color(0xFFF2F2F7)
         val surfaceVariant = Color(0xFFE3E2E9)
         lightColorScheme(
             primary = accent,

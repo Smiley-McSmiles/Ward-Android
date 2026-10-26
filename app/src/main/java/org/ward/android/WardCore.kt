@@ -231,7 +231,9 @@ class WardCore private constructor(val context: Context) {
         val msg = MessageEntity(chatId = chat.id, stanzaId = id, originId = id, msgId = id,
             sender = acc.jid, senderJid = acc.jid, senderName = acc.displayName, direction = 1,
             timestamp = System.currentTimeMillis(), body = text, kind = if (text.startsWith("/me ")) "me" else "text",
-            replyTo = replyTo?.stanzaId ?: "", replyPreview = replyTo?.body ?: "", replyAuthor = replyTo?.senderName ?: "",
+            replyTo = replyTo?.stanzaId ?: "",
+            replyPreview = replyTo?.let { if (it.kind == "me") it.body.removePrefix("/me ").trimStart() else it.body } ?: "",
+            replyAuthor = replyTo?.senderName ?: "",
             status = 0)
         val localId = dao.insertMessage(msg)
         val stored = msg.copy(id = localId)
@@ -270,6 +272,8 @@ class WardCore private constructor(val context: Context) {
         val newMentions = if (!outgoing && !active && mentions) chat.mentions + 1 else chat.mentions
         val preview = when {
             msg.retracted > 0 -> "Message deleted"
+            msg.kind == "me" && msg.body.isNotBlank() ->
+                msg.body.removePrefix("/me ").trimStart().lineSequence().firstOrNull() ?: ""
             msg.body.isNotBlank() -> msg.body.lineSequence().firstOrNull() ?: ""
             msg.attachmentsJson != "[]" -> "📎 Attachment"
             else -> chat.preview
