@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
@@ -106,14 +107,20 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.background,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 30.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(if (own) "Your devices and encryption keys" else "Devices and keys",
                         style = MaterialTheme.typography.titleLarge)
                     Text("Fingerprints use the same format as Conversations, Gajim and Ward.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp))
                 }
                 IconButton(enabled = !busy, onClick = {
                     busy = true
@@ -124,26 +131,33 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                     }
                 }) { Icon(Icons.Filled.Refresh, "Refresh device list") }
             }
-            Spacer(Modifier.height(10.dp))
-            if (devices.isEmpty()) {
-                Text("No OMEMO devices have been published for this address yet.", Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            SettingsSectionLabel("Devices")
+            SettingsGroup {
+                if (devices.isEmpty()) {
+                    ListItem(
+                        headlineContent = { Text("No published devices") },
+                        supportingContent = { Text("This address has not published an OMEMO device list yet.") },
+                        leadingContent = { Icon(Icons.Filled.Devices, null) }
+                    )
+                } else {
+                    devices.forEachIndexed { index, device ->
+                        if (index > 0) SettingsDivider()
+                        DeviceRow(vm, accountId, jid, device, onForget = { forget = device })
+                    }
+                }
             }
-            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
-                devices.forEach { d -> DeviceRow(vm, accountId, jid, d, onForget = { forget = d }) }
-                if (own && account != null) {
-                    Spacer(Modifier.height(14.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(8.dp))
-                    Text("Backup", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                    Text("Passphrase-protected files compatible with Ward for GTK. Android-to-Android restores also keep sessions.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 4.dp))
+
+            if (own && account != null) {
+                SettingsSectionLabel("Backup",
+                    "Passphrase-protected files compatible with Ward for GTK. Android-to-Android restores also keep sessions.")
+                SettingsGroup {
                     ListItem(
                         headlineContent = { Text("Export this device…") },
                         supportingContent = { Text("OMEMO identity, pre-keys and sessions") },
                         leadingContent = { Icon(Icons.Filled.Download, null) },
                         modifier = Modifier.clickable { dialogKind = "export-device"; passphrase = "" })
+                    SettingsDivider()
                     ListItem(
                         headlineContent = { Text("Import a device…") },
                         supportingContent = { Text("Restore a device backup; use one copy at a time") },
@@ -153,11 +167,13 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                             AppLockStore.beginExternalActivity()
                             importFile.launch(arrayOf("application/octet-stream", "*/*"))
                         })
+                    SettingsDivider()
                     ListItem(
                         headlineContent = { Text("Export trust decisions…") },
                         supportingContent = { Text("Verified and distrusted keys for all accounts") },
                         leadingContent = { Icon(Icons.Filled.Download, null) },
                         modifier = Modifier.clickable { dialogKind = "export-trust"; passphrase = "" })
+                    SettingsDivider()
                     ListItem(
                         headlineContent = { Text("Import trust decisions…") },
                         supportingContent = { Text("Restore verification choices") },
@@ -167,21 +183,30 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                             AppLockStore.beginExternalActivity()
                             importFile.launch(arrayOf("application/octet-stream", "*/*"))
                         })
-                    Spacer(Modifier.height(6.dp))
-                    HorizontalDivider()
+                }
+
+                SettingsSectionLabel("Maintenance",
+                    "Cleanup reads the published device lists from the server before removing anything.")
+                SettingsGroup {
                     ListItem(
                         headlineContent = { Text("Clean up old keys and devices…") },
-                        supportingContent = { Text("Read the server’s device lists, remove orphaned keys, then republish this device") },
+                        supportingContent = { Text("Remove orphaned bundles and local keys, then republish this device") },
                         leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },
                         modifier = Modifier.clickable(enabled = !busy) { cleanConfirm = true })
                     if (busy) {
-                        Spacer(Modifier.height(8.dp))
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                        SettingsDivider()
+                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(8.dp))
+                            Text("Comparing local keys with the server…", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                     if (message.isNotBlank()) {
+                        SettingsDivider()
                         Surface(shape = MaterialTheme.shapes.medium,
                             color = MaterialTheme.colorScheme.inverseSurface,
-                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                            modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.Info, null, Modifier.size(18.dp),
@@ -253,7 +278,6 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                     passphrase = ""
                     val current = kind
                     dialogKind = null
-                    if (current == null) return@TextButton
                     if (current.startsWith("export")) {
                         pendingExportPass = pass
                         AppLockStore.beginExternalActivity()
@@ -292,41 +316,41 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
 
 @Composable
 private fun DeviceRow(vm: AppViewModel, accountId: Long, jid: String, d: DeviceEntity, onForget: () -> Unit) {
-    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (d.thisDevice) "This device" else "Device ${d.deviceId}", style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f))
-                val trustColor = when (d.trust) {
-                    "verified", "trusted" -> MaterialTheme.colorScheme.primaryContainer
-                    "distrusted" -> MaterialTheme.colorScheme.errorContainer
-                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
-                }
-                Surface(shape = CircleShape, color = trustColor) {
-                    Text(d.trust.replaceFirstChar { it.uppercase() },
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        color = when (d.trust) {
-                            "distrusted" -> MaterialTheme.colorScheme.onErrorContainer
-                            "verified", "trusted" -> MaterialTheme.colorScheme.onPrimaryContainer
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        })
-                }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (d.thisDevice) "This device" else "Device ${d.deviceId}",
+                style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            val trustColor = when (d.trust) {
+                "verified", "trusted" -> MaterialTheme.colorScheme.primaryContainer
+                "distrusted" -> MaterialTheme.colorScheme.errorContainer
+                else -> MaterialTheme.colorScheme.surfaceContainerHighest
             }
-            if (d.label.isNotBlank()) Text(d.label, style = MaterialTheme.typography.bodySmall)
-            Text(if (d.protocol == "omemo2") "OMEMO 2" else "Legacy OMEMO", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(6.dp))
-            Text(formatFingerprint(d.fingerprint), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (d.trust != "verified") Button(onClick = {
-                    vm.trustDevice(accountId, jid, d.deviceId, d.fingerprint, true, d.protocol)
-                }) { Text("Trust") }
-                if (d.trust != "distrusted") OutlinedButton(onClick = {
-                    vm.trustDevice(accountId, jid, d.deviceId, d.fingerprint, false, d.protocol)
-                }) { Text("Distrust") }
-                if (!d.own) OutlinedButton(onClick = onForget) { Text("Forget") }
+            Surface(shape = CircleShape, color = trustColor) {
+                Text(d.trust.replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    color = when (d.trust) {
+                        "distrusted" -> MaterialTheme.colorScheme.onErrorContainer
+                        "verified", "trusted" -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    })
             }
+        }
+        if (d.label.isNotBlank()) Text(d.label, style = MaterialTheme.typography.bodySmall)
+        Text(if (d.protocol == "omemo2") "OMEMO 2" else "Legacy OMEMO",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(6.dp))
+        Text(formatFingerprint(d.fingerprint), fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (d.trust != "verified") Button(onClick = {
+                vm.trustDevice(accountId, jid, d.deviceId, d.fingerprint, true, d.protocol)
+            }) { Text("Trust") }
+            if (d.trust != "distrusted") OutlinedButton(onClick = {
+                vm.trustDevice(accountId, jid, d.deviceId, d.fingerprint, false, d.protocol)
+            }) { Text("Distrust") }
+            if (!d.own) OutlinedButton(onClick = onForget) { Text("Forget") }
         }
     }
 }
