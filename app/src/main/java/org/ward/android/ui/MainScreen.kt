@@ -67,6 +67,9 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     var addAccountScreen by remember { mutableStateOf(false) }
     var accountFilter by remember { mutableStateOf<Long?>(null) }
     var passwordFor by remember { mutableStateOf<AccountEntity?>(null) }
+    val snackbar = remember { SnackbarHostState() }
+    val uiScope = rememberCoroutineScope()
+    var resyncingHistory by remember { mutableStateOf(false) }
     LaunchedEffect(accounts) {
         if (accountFilter != null && accounts.none { it.id == accountFilter }) accountFilter = null
     }
@@ -89,6 +92,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
             "server" -> ServerTab(vm, accounts, states, PaddingValues(0.dp), onBack = { screen = "chats" })
             else -> Scaffold(
                 containerColor = MaterialTheme.colorScheme.background,
+                snackbarHost = { WardSnackbarHost(snackbar) },
                 topBar = {
                     TopAppBar(colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -139,6 +143,25 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                             Text("Ward", fontWeight = FontWeight.Bold)
                         }
                     }, actions = {
+                        IconButton(
+                            enabled = !resyncingHistory,
+                            onClick = {
+                                resyncingHistory = true
+                                vm.resyncHistory(accountFilter) { result ->
+                                    resyncingHistory = false
+                                    uiScope.launch {
+                                        snackbar.showSnackbar(result, withDismissAction = true,
+                                            duration = SnackbarDuration.Long)
+                                    }
+                                }
+                            }
+                        ) {
+                            if (resyncingHistory) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Filled.Refresh, "Re-sync chat history from the server")
+                            }
+                        }
                         IconButton(onClick = { searchMode = true }) { Icon(Icons.Filled.Search, "Search") }
                         Box {
                             IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Filled.MoreVert, "More") }

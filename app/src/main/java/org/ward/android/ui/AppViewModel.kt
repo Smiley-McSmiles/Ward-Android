@@ -205,6 +205,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         onResult(result)
     }
 
+    fun resyncHistory(accountId: Long?, onResult: (String) -> Unit) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) {
+            runCatching { core.resyncHistory(accountId) }.getOrElse { it.message ?: "History re-sync failed" }
+        }
+        onResult(result)
+    }
+
     fun cleanUpKeys(onResult: (String) -> Unit) = viewModelScope.launch {
         val result = withContext(Dispatchers.IO) {
             runCatching { core.cleanUpKeys() }.getOrElse { it.message ?: "Key cleanup failed" }

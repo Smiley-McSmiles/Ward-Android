@@ -1823,6 +1823,66 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }
     }
 
+    @Volatile private var historyResyncRunning = false
+
+    /**
+     * Walk a chat's server archive backwards, independent of the normal MAM cursor. This is the
+     * Android equivalent of Ward for GTK's "Re-sync chat history from the server": message ids
+     * still deduplicate, but gaps left by a lost cursor or an interrupted sync get filled in.
+     */
+    private suspend fun resyncChatArchive(chat: ChatEntity): Int {
+        val conn = connection ?: return 0
+        if (chat.isGroup && !chat.joined) return 0
+        val archiveJid = if (chat.isGroup) chat.jid else account.jid
+        val manager = MamManager.getInstanceFor(conn, JidCreate.from(archiveJid))
+        if (!manager.isSupported) return 0
+        val builder = MamManager.MamQueryArgs.builder().queryLastPage().setResultPageSize(100)
+        if (!chat.isGroup) builder.limitResultsToJid(JidCreate.from(chat.jid))
+        val query = manager.queryArchive(builder.build())
+
+        fun processPage() {
+            val decrypted = if (omemoReady) {
+                runCatching { omemo?.decryptMamQueryResult(query) }.getOrNull()
+            } else null
+            processMam(query.page.forwarded, decrypted)
+        }
+
+        var pages = 0
+        processPage()
+        pages++
+        while (!query.isComplete && pages < 200) {
+            val older = query.pagePrevious(100)
+            if (older.isEmpty()) break
+            processPage()
+            pages++
+        }
+        core.addXmlLog(account.id, false, "Re-synced ${chat.jid} from the server ($pages page(s))")
+        return pages
+    }
+
+    suspend fun resyncAllChats(): String {
+        if (historyResyncRunning) return "${account.jid}: a re-sync is already running"
+        historyResyncRunning = true
+        return try {
+            val chats = core.dao.chatsNow().filter { it.accountId == account.id && it.open }
+            if (chats.isEmpty()) return "${account.jid}: no chats to re-sync"
+            var synced = 0
+            var skipped = 0
+            for (chat in chats) {
+                val pages = runCatching { resyncChatArchive(chat) }.getOrDefault(0)
+                if (pages > 0) synced++ else skipped++
+            }
+            buildString {
+                append(account.jid).append(": re-synced ").append(synced).append(" chat")
+                if (synced != 1) append('s')
+                if (skipped > 0) append(", ").append(skipped).append(" skipped")
+                append('.')
+            }
+        } finally {
+            historyResyncRunning = false
+        }
+    }
+
     fun syncChat(chat: ChatEntity) {
         scope.launch {
             try {

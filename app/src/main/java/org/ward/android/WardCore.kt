@@ -173,6 +173,15 @@ class WardCore private constructor(val context: Context) {
      * fetches from PEP first, because the local database can contain devices that were removed
      * from the server months ago (or bundles left behind by a reset).
      */
+    /** Re-sync every open chat from the server archive, optionally for one account. */
+    suspend fun resyncHistory(accountId: Long? = null): String {
+        val targets = allSessions().filter { it.online && (accountId == null || it.account.id == accountId) }
+        if (targets.isEmpty()) return "Connect an account first."
+        val lines = mutableListOf<String>()
+        for (session in targets) lines += session.resyncAllChats()
+        return lines.joinToString("\n")
+    }
+
     suspend fun cleanUpKeys(): String {
         val all = allSessions()
         if (all.isEmpty()) return "No connected accounts. Connect an account and try again."
