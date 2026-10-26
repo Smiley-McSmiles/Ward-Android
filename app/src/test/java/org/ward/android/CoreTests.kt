@@ -8,6 +8,7 @@ import org.jivesoftware.smack.util.PacketParserUtils
 import org.junit.Assert.*
 import org.junit.Test
 import org.ward.android.data.SettingsSchema
+import org.ward.android.ui.shouldAutoDownload
 import org.ward.android.util.FileCrypto
 import org.ward.android.xmpp.ExternalServicesIq
 import org.ward.android.xmpp.JingleIqs
@@ -23,6 +24,16 @@ import org.ward.android.xmpp.guessMime
 import java.io.File
 
 class CoreTests {
+    @Test fun unknownAttachmentSizeDoesNotAutoDownloadOnMeteredConnections() {
+        val oneMiB = 1024L * 1024L
+        assertFalse(shouldAutoDownload(false, false, 0L, oneMiB, false))
+        assertFalse(shouldAutoDownload(false, false, 57L * 1024 * 1024, oneMiB, false))
+        assertTrue(shouldAutoDownload(false, false, 500L * 1024, oneMiB, false))
+        assertTrue(shouldAutoDownload(false, false, 0L, oneMiB, true))
+        assertTrue(shouldAutoDownload(true, false, 0L, oneMiB, false))
+        assertTrue(shouldAutoDownload(false, true, 0L, oneMiB, false))
+    }
+
     @Test fun settingsHaveOneHomeAndNoDeadControls() {
         val keys = SettingsSchema.specs.map { it.key }
         assertEquals(keys.size, keys.toSet().size)

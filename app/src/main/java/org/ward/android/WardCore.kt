@@ -15,10 +15,13 @@ import android.provider.OpenableColumns
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ward.android.data.*
@@ -40,6 +43,7 @@ class WardCore private constructor(val context: Context) {
     val gson = Gson()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = ConcurrentHashMap<Long, XmppSession>()
+    private val downloadJobs = ConcurrentHashMap<String, Deferred<File?>>()
     private val _states = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
     val states: StateFlow<Map<Long, ConnectionState>> = _states
     private val _typing = MutableStateFlow<Map<Long, String>>(emptyMap())
@@ -498,14 +502,45 @@ class WardCore private constructor(val context: Context) {
         return updated
     }
 
+    private fun cachedFileForUrl(cache: File, url: String): File? {
+        val prefix = org.ward.android.util.FileCrypto.cacheName(url, "")
+        return cache.listFiles()?.firstOrNull {
+            it.isFile && it.length() > 0 && it.name.startsWith(prefix) && !it.name.endsWith(".download")
+        }
+    }
+
     suspend fun localFile(url: String, name: String, mime: String): File? {
         val cache = File(context.cacheDir, "files").apply { mkdirs() }
         val noMedia = File(cache, ".nomedia")
         if (settings.bool("attachments.hide_gallery")) noMedia.createNewFile() else noMedia.delete()
+
+        // The same attachment can be composed more than once (for example after a carbon copy or
+        // when a LazyColumn item is recreated). Join the in-flight download instead of starting a
+        // second transfer that writes the same temp file and makes the progress bar flicker.
+        cachedFileForUrl(cache, url)?.let { return it }
+        val job = downloadJobs.compute(url) { _, current ->
+            if (current != null && !current.isCompleted) {
+                current
+            } else {
+                scope.async(Dispatchers.IO) { downloadToCache(cache, url, name) }
+            }
+        } ?: return cachedFileForUrl(cache, url)
+        if (job.isCompleted) downloadJobs.remove(url, job)
+        else job.invokeOnCompletion { downloadJobs.remove(url, job) }
+        return job.await()
+    }
+
+    private suspend fun downloadToCache(cache: File, url: String, name: String): File? {
+        // Close the race where another caller finished between our initial lookup and starting
+        // this job: reuse the completed file instead of downloading it again.
+        cachedFileForUrl(cache, url)?.let { return it }
         val out = File(cache, org.ward.android.util.FileCrypto.cacheName(url, name))
-        if (out.exists() && out.length() > 0) return out
         val link = org.ward.android.util.FileCrypto.parse(url)
-        downloadProgress.value = downloadProgress.value + (url to 0f)
+        // Remove only leftovers for this URL; a live transfer is protected by downloadJobs.
+        val prefix = org.ward.android.util.FileCrypto.cacheName(url, "")
+        cache.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".download") }
+            ?.forEach { it.delete() }
+        downloadProgress.update { it + (url to 0f) }
         return try {
             withContext(Dispatchers.IO) {
                 val source = if (link != null) link.httpsUrl else url
@@ -523,8 +558,9 @@ class WardCore private constructor(val context: Context) {
                             output.write(buffer, 0, read)
                             copied += read
                             if (total > 0 && (copied == total || System.currentTimeMillis() - lastUpdate > 100)) {
-                                downloadProgress.value = downloadProgress.value +
-                                    (url to (copied.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                                downloadProgress.update { progress ->
+                                    progress + (url to (copied.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                                }
                                 lastUpdate = System.currentTimeMillis()
                             }
                         }
@@ -535,14 +571,20 @@ class WardCore private constructor(val context: Context) {
                     org.ward.android.util.FileCrypto.decrypt(raw, out, link.key, link.iv)
                     raw.delete()
                 } else {
-                    raw.renameTo(out)
+                    out.delete()
+                    if (!raw.renameTo(out)) {
+                        raw.copyTo(out, overwrite = true)
+                        raw.delete()
+                    }
                 }
-                downloadProgress.value = downloadProgress.value + (url to 1f)
+                downloadProgress.update { it + (url to 1f) }
                 out
             }
-        } catch (_: Exception) { null
+        } catch (_: Exception) {
+            runCatching { File(cache, out.name + ".download").delete() }
+            null
         } finally {
-            downloadProgress.value = downloadProgress.value - url
+            downloadProgress.update { it - url }
         }
     }
 

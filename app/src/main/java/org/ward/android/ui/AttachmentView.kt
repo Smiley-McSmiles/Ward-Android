@@ -75,8 +75,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     val autoLimit = (vm.settings.string("attachments.auto_download", "1024").toIntOrNull() ?: 1024) * 1024L
     val allowUnmetered = vm.settings.bool("attachments.accept_unmetered") &&
         (context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false)
-    val autoDownload = localFile != null || url.startsWith("local://") || size <= 0L ||
-        allowUnmetered || (autoLimit > 0L && size <= autoLimit)
+    val autoDownload = shouldAutoDownload(localFile != null, url.startsWith("local://"), size, autoLimit, allowUnmetered)
     LaunchedEffect(url, downloadRequested) {
         if (file == null && (autoDownload || downloadRequested)) {
             loading = true
@@ -461,3 +460,9 @@ fun formatBytes(size: Long): String = when {
     size > 1_000 -> "%.0f kB".format(size / 1_000.0)
     else -> "$size B"
 }
+
+
+/** Keep unknown-size attachments manual on metered networks instead of downloading without limit. */
+internal fun shouldAutoDownload(hasLocalFile: Boolean, isLocalUrl: Boolean, size: Long,
+                                limitBytes: Long, allowUnmetered: Boolean): Boolean =
+    hasLocalFile || isLocalUrl || (limitBytes > 0L && size > 0L && size <= limitBytes) || allowUnmetered
