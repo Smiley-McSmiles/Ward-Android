@@ -84,6 +84,15 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
         }
     }
     val accounts by vm.accounts.collectAsState()
+    val currentCall by vm.core.call.collectAsState()
+    val callSounds = remember { CallSounds(context, vm.settings) }
+    val ringingIncoming = currentCall?.phase == "INCOMING"
+    val ringingOutgoing = currentCall?.let { it.phase in listOf("OUTGOING", "RINGING") && !it.incoming } == true
+    DisposableEffect(currentCall?.sessionId, ringingIncoming, ringingOutgoing) {
+        if (ringingIncoming || ringingOutgoing) callSounds.start(ringingIncoming)
+        else callSounds.stop()
+        onDispose { callSounds.stop() }
+    }
     var addingAccount by remember { mutableStateOf(false) }
     LaunchedEffect(accounts.size) {
         if (accounts.isNotEmpty()) {
@@ -103,8 +112,7 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
                     WelcomeScreen(vm, onBack = if (addingAccount) ({ addingAccount = false }) else null)
                     if (addingAccount) BackHandler { addingAccount = false }
                 } else {
-                    val call by vm.core.call.collectAsState()
-                    Crossfade(targetState = call != null, animationSpec = tween(160), label = "call") { inCall ->
+                    Crossfade(targetState = currentCall != null, animationSpec = tween(160), label = "call") { inCall ->
                         if (inCall) CallOverlay(vm) else MainScreen(vm, onAddAccount = { addingAccount = true })
                     }
                 }

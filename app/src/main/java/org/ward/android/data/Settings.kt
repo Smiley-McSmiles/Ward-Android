@@ -109,8 +109,10 @@ object SettingsSchema {
         t("calls.turn_secret", "TURN shared secret", "For time-limited credentials, as used by coturn and eturnal", "calls", "Network", "", true),
         i("calls.turn_ttl", "TURN credential lifetime", "Seconds; used with the shared secret", "calls", "Network", 86400, 300, 604800, 3600, "seconds", true),
         b("calls.relay_only", "Always relay calls", "Use TURN even when a direct connection is possible", "calls", "Network", true, true),
-        t("calls.ringtone", "Ringtone", "System ringtone; empty uses the default", "calls", "Sounds"),
-        t("calls.ringback", "Calling tone", "System tone; empty uses the default", "calls", "Sounds"),
+        c("calls.ringtone", "Ringtone", "Played while an incoming call is ringing", "calls", "Sounds", "ward",
+            "ward" to "Ward default", "system" to "System default", "none" to "Silent"),
+        c("calls.ringback", "Calling tone", "Played while an outgoing call is ringing", "calls", "Sounds", "ward",
+            "ward" to "Ward default", "system" to "System default", "none" to "Silent"),
 
         b("notify.enabled", "Notifications", "", "notifications", "Notifications", true),
         c("notify.content", "Show in notification", "", "notifications", "Notifications", "full", "full" to "Sender and text", "sender" to "Sender only", "nothing" to "Nothing"),
