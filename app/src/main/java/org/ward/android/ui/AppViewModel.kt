@@ -199,7 +199,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         core.session(accountId)?.forgetDevice(jid, deviceId, protocol)
     }
     fun repairOmemo2(onResult: (String) -> Unit) = viewModelScope.launch {
-        val result = withContext(Dispatchers.IO) { runCatching { core.repairOmemo2() }.getOrElse { it.stackTraceToString() } }
+        val result = withContext(Dispatchers.IO) {
+            runCatching { core.repairOmemo2() }.getOrElse { it.message ?: "OMEMO 2 repair failed" }
+        }
+        onResult(result)
+    }
+
+    fun cleanUpKeys(onResult: (String) -> Unit) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) {
+            runCatching { core.cleanUpKeys() }.getOrElse { it.message ?: "Key cleanup failed" }
+        }
         onResult(result)
     }
     fun createGroup(accountId: Long, room: String, name: String, private: Boolean, description: String, invitees: List<String>) = viewModelScope.launch {

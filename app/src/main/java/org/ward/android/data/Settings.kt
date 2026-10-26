@@ -22,128 +22,136 @@ data class SettingSpec(
     val advanced: Boolean = false
 )
 
+/**
+ * Preferences are grouped by where the user would look for them, not by where they appear in the
+ * GTK desktop app. Controls that only made sense on the desktop (tray icon, hover timestamps,
+ * custom fonts, URI-handler registration) are intentionally absent: on Android they did nothing,
+ * and dead switches make the rest of the settings feel unreliable.
+ */
 object SettingsSchema {
     val pages = listOf(
-        "general" to "General", "security" to "Security", "appearance" to "Appearance", "chats" to "Chats", "calls" to "Calls",
+        "general" to "General",
+        "appearance" to "Appearance",
+        "chats" to "Chats",
+        "calls" to "Calls",
         "attachments" to "Attachments",
-        "notifications" to "Notifications", "accounts" to "Accounts", "encryption" to "Encryption",
-        "storage" to "Storage", "advanced" to "Advanced"
+        "notifications" to "Notifications",
+        "encryption" to "Encryption",
+        "privacy" to "Privacy",
+        "security" to "Security",
+        "accounts" to "Accounts",
+        "storage" to "Storage",
+        "advanced" to "Advanced"
     )
-    private fun b(key: String, title: String, sub: String, page: String, group: String, def: Boolean = false, adv: Boolean = false) =
-        SettingSpec(key, title, sub, page, group, SettingType.BOOL, def, advanced = adv)
-    private fun c(key: String, title: String, sub: String, page: String, group: String, def: Any, vararg choices: Pair<Any, String>, adv: Boolean = false) =
-        SettingSpec(key, title, sub, page, group, SettingType.CHOICE, def, choices.map { SettingChoice(it.first, it.second) }, advanced = adv)
-    private fun i(key: String, title: String, sub: String, page: String, group: String, def: Int, min: Int, max: Int, step: Int = 1, unit: String = "", adv: Boolean = false) =
-        SettingSpec(key, title, sub, page, group, SettingType.INT, def, min = min, max = max, step = step, unit = unit, advanced = adv)
-    private fun t(key: String, title: String, sub: String, page: String, group: String, def: String = "", adv: Boolean = false) =
-        SettingSpec(key, title, sub, page, group, SettingType.TEXT, def, advanced = adv)
-    private fun l(key: String, title: String, sub: String, page: String, group: String, def: List<String> = emptyList(), adv: Boolean = false) =
-        SettingSpec(key, title, sub, page, group, SettingType.LIST, def, advanced = adv)
+
+    private fun b(key: String, title: String, sub: String, page: String, group: String, def: Boolean = false) =
+        SettingSpec(key, title, sub, page, group, SettingType.BOOL, def)
+    private fun c(key: String, title: String, sub: String, page: String, group: String, def: Any, vararg choices: Pair<Any, String>) =
+        SettingSpec(key, title, sub, page, group, SettingType.CHOICE, def, choices.map { SettingChoice(it.first, it.second) })
+    private fun i(key: String, title: String, sub: String, page: String, group: String, def: Int, min: Int, max: Int, step: Int = 1, unit: String = "") =
+        SettingSpec(key, title, sub, page, group, SettingType.INT, def, min = min, max = max, step = step, unit = unit)
+    private fun t(key: String, title: String, sub: String, page: String, group: String, def: String = "") =
+        SettingSpec(key, title, sub, page, group, SettingType.TEXT, def)
+    private fun l(key: String, title: String, sub: String, page: String, group: String, def: List<String> = emptyList()) =
+        SettingSpec(key, title, sub, page, group, SettingType.LIST, def)
 
     val defaultReactions = listOf("👍", "❤️", "😂", "😮", "😢", "🎉")
+    private val defaultHighlightWords = emptyList<String>()
+
     val specs: List<SettingSpec> = listOf(
-        b("general.background", "Run in the background", "Stay connected when the app is closed, so messages and notifications still arrive", "general", "Running", true),
-        b("general.autostart", "Start at login", "Start hidden, in the background", "general", "Running"),
-        c("general.tray", "Persistent notification", "Keep Ward's connection visible in the notification shade", "general", "Running", "auto", "auto" to "Automatic", "always" to "Always", "never" to "Never"),
-        b("general.confirm_quit", "Confirm before quitting", "", "general", "Running"),
-        b("general.uri_handler", "Open xmpp: links with Ward", "Links to contacts and groups in your browser open the right chat", "general", "Links", true),
-        b("general.search_provider", "Show contacts in system search", "Let Android search find your contacts and chats by name", "general", "Links"),
-        b("general.battery_optimization", "Battery optimization help", "Ask Android not to stop Ward in the background", "general", "Running", true),
+        // ------------------------------------------------------------- General
+        b("general.background", "Run in the background", "Stay connected when Ward is not on screen so messages and calls still arrive", "general", "Background", true),
+        b("general.autostart", "Start after restarting the phone", "Reconnect automatically after Android finishes booting", "general", "Background"),
 
-        c("appearance.style", "Style", "", "appearance", "Colours", "system", "system" to "Follow system", "light" to "Light", "dark" to "Dark"),
-        c("appearance.accent", "Accent colour", "", "appearance", "Colours", "blue", "blue" to "Blue", "teal" to "Teal", "green" to "Green", "yellow" to "Yellow", "orange" to "Orange", "red" to "Red", "pink" to "Pink", "purple" to "Purple", "slate" to "Slate"),
-        b("appearance.nick_colors", "Coloured nicknames", "The same colour for a person as in Conversations and Dino", "appearance", "Colours", true),
-        i("appearance.text_scale", "Text size", "", "appearance", "Text", 100, 80, 200, 10, "%"),
-        c("appearance.line_spacing", "Line spacing", "", "appearance", "Text", "normal", "compact" to "Compact", "normal" to "Normal", "relaxed" to "Relaxed"),
+        // ---------------------------------------------------------- Appearance
+        c("appearance.style", "Theme", "Follow the system, or always use light or dark", "appearance", "Colours", "system",
+            "system" to "Follow system", "light" to "Light", "dark" to "Dark"),
+        c("appearance.accent", "Accent colour", "Used for buttons, switches, links and selected items", "appearance", "Colours", "blue",
+            "blue" to "Blue", "teal" to "Teal", "green" to "Green", "yellow" to "Yellow", "orange" to "Orange",
+            "red" to "Red", "pink" to "Pink", "purple" to "Purple", "slate" to "Slate"),
+        i("appearance.text_scale", "Text size", "Scales every screen in Ward", "appearance", "Text", 100, 80, 200, 10, "%"),
         b("appearance.large_emoji", "Large emoji in emoji-only messages", "", "appearance", "Text", true),
-        c("appearance.layout", "Message layout", "", "appearance", "Messages", "cozy", "bubbles" to "Bubbles", "cozy" to "Cozy: names and avatars", "compact" to "Compact: like IRC"),
-        b("appearance.chat_animations", "Animate chats", "Slide a chat up into the message area when you open it", "appearance", "Messages", true),
-        b("appearance.message_animations", "Animate messages", "New messages slide up into the conversation", "appearance", "Messages", true),
-        c("appearance.avatars", "Avatars in chats", "", "appearance", "Messages", "always", "always" to "Always", "groups" to "Groups only", "never" to "Never"),
-        c("appearance.avatar_shape", "Avatar shape", "", "appearance", "Messages", "circle", "circle" to "Circle", "rounded" to "Rounded square"),
-        c("appearance.timestamps", "Timestamps", "", "appearance", "Messages", "always", "always" to "Always", "hover" to "On hover", "off" to "Off"),
-        c("appearance.time_format", "Time format", "", "appearance", "Messages", "system", "system" to "Follow system", "12" to "12-hour", "24" to "24-hour"),
-        b("appearance.time_seconds", "Show seconds", "", "appearance", "Messages", false, true),
-        c("appearance.list_density", "Chat list density", "", "appearance", "Chat list", "comfortable", "comfortable" to "Comfortable", "compact" to "Compact"),
-        b("appearance.list_previews", "Message previews in the chat list", "", "appearance", "Chat list", true),
-        t("appearance.message_font", "Message font", "Empty uses the system font", "appearance", "Text", "", true),
-        t("appearance.code_font", "Code font", "Empty uses the system monospace font", "appearance", "Text", "", true),
+        c("appearance.layout", "Message layout", "How conversation bubbles are drawn", "appearance", "Messages", "cozy",
+            "bubbles" to "Bubbles", "cozy" to "Cozy: names and avatars", "compact" to "Compact: like IRC"),
+        b("appearance.message_animations", "Animate new messages", "New messages slide into the conversation", "appearance", "Messages", true),
+        c("appearance.avatars", "Avatars in chats", "", "appearance", "Messages", "always",
+            "always" to "Always", "groups" to "Groups only", "never" to "Never"),
+        c("appearance.avatar_shape", "Avatar shape", "", "appearance", "Messages", "circle",
+            "circle" to "Circle", "rounded" to "Rounded square"),
+        c("appearance.time_format", "Time format", "", "appearance", "Messages", "system",
+            "system" to "Follow system", "12" to "12-hour", "24" to "24-hour"),
+        b("appearance.time_seconds", "Show seconds in message times", "", "appearance", "Messages"),
+        c("appearance.list_density", "Chat list density", "", "appearance", "Chat list", "comfortable",
+            "comfortable" to "Comfortable", "compact" to "Compact"),
+        b("appearance.list_previews", "Message previews", "Show the last message under each chat", "appearance", "Chat list", true),
 
-        c("chats.send_with", "Send with", "Choose whether Enter sends or starts a new line", "chats", "Writing", "enter", "enter" to "Enter sends", "newline" to "Enter adds a new line"),
-        b("chats.toolbar", "Formatting toolbar", "", "chats", "Writing"),
-        b("chats.shortcodes", "Convert :shortcodes: to emoji", "", "chats", "Writing", true),
-        b("chats.ascii_smileys", "Convert smileys like :) to emoji", "", "chats", "Writing"),
-        b("chats.spellcheck", "Spell check", "", "chats", "Writing", true),
-        l("chats.quick_reactions", "Quick reactions", "The six emoji in the reaction bar", "chats", "Messages", defaultReactions),
+        // --------------------------------------------------------------- Chats
+        c("chats.send_with", "Send with", "Choose whether Enter sends or starts a new line", "chats", "Writing", "enter",
+            "enter" to "Enter sends", "newline" to "Enter adds a new line"),
+        l("chats.quick_reactions", "Quick reactions", "The emoji shown in the reaction bar, one per line", "chats", "Messages", defaultReactions),
         c("chats.reaction_skin_tone", "Reaction skin tone", "Used for hand and people reactions", "chats", "Messages", "",
             "" to "Default", "\uD83C\uDFFB" to "Light", "\uD83C\uDFFC" to "Medium light",
             "\uD83C\uDFFD" to "Medium", "\uD83C\uDFFE" to "Medium dark", "\uD83C\uDFFF" to "Dark"),
-        b("chats.markdown_others", "Render Markdown from other apps", "Other apps use simpler styling, where *text* is bold instead of italic", "chats", "Messages"),
-        i("chats.collapse_after", "Collapse long messages after", "Lines; 0 never collapses", "chats", "Messages", 25, 0, 100, 5, "lines"),
-        c("chats.animations", "Play animated images", "", "chats", "Messages", "always", "always" to "Always", "hover" to "On hover", "never" to "Never"),
-        c("attachments.image_compression", "Image Compression", "Compress outgoing photos before upload", "attachments", "Sending", "large",
-            "off" to "Off", "large" to "Large images only", "always" to "Always"),
-        c("attachments.video_quality", "Video Quality", "Quality used when preparing outgoing videos", "attachments", "Sending", "medium",
-            "low" to "Low (240p)", "medium" to "Medium (360p)", "high" to "High (720p)", "original" to "Original"),
-        c("attachments.auto_download", "Automatic download", "Maximum file size downloaded automatically", "attachments", "Receiving", 1024,
-            0 to "Never", 256 to "256 KiB", 1024 to "1024 KiB", 5120 to "5 MiB", 20480 to "20 MiB"),
-        b("attachments.accept_unmetered", "Always accept when unmetered", "Don't use the above size limit on unmetered networks", "attachments", "Receiving", true),
-        b("attachments.hide_gallery", "Hide media in gallery", "Hide received and sent media from system gallery views", "attachments", "Receiving"),
-        c("chats.link_previews", "Link previews", "Fetching a preview shows your IP address to the website", "chats", "Messages", "contacts", "off" to "Off", "contacts" to "Only from contacts", "always" to "Always"),
-        b("chats.confirm_delete", "Confirm “Delete for everyone”", "", "chats", "Messages", true),
+        b("chats.confirm_delete", "Confirm “Delete for everyone”", "Ask before retracting a message for the other person", "chats", "Messages", true),
         b("chats.send_typing", "Send typing indicators", "", "chats", "Sharing", true),
         b("chats.show_typing", "Show typing indicators", "", "chats", "Sharing", true),
         b("chats.send_markers", "Send read markers", "", "chats", "Sharing", true),
         b("chats.send_receipts", "Send delivery receipts", "", "chats", "Sharing", true),
-        c("chats.join_leave", "Join and leave lines in groups", "", "chats", "Groups", "summary", "summary" to "Summary", "all" to "Every line", "hidden" to "Hidden"),
-        c("chats.voice_quality", "Voice message quality", "", "chats", "Media", "standard", "standard" to "Standard", "high" to "High"),
 
+        // --------------------------------------------------------------- Calls
         b("calls.enabled", "Audio and video calls", "Contacts can call you, and you them, on this device", "calls", "Calls", true),
-        i("calls.mic_gain", "Microphone volume", "Applied to the microphone before encoding", "calls", "Audio", 100, 0, 200, 5, "%"),
-        i("calls.speaker_gain", "Speaker volume", "Applied to the other side's audio", "calls", "Audio", 100, 0, 200, 5, "%"),
+        i("calls.speaker_gain", "Speaker volume", "Applied to the other person's audio during calls", "calls", "Audio", 100, 50, 200, 5, "%"),
         b("calls.discover", "Discover STUN/TURN from the server", "Use XEP-0215 external service discovery for call relay servers", "calls", "Network", true),
         t("calls.stun", "STUN servers", "Space-separated stun:host:port addresses", "calls", "Network"),
         t("calls.turn", "TURN servers", "Space-separated turn:host:port addresses; add ?transport=tcp for TCP", "calls", "Network"),
         t("calls.turn_user", "TURN username", "", "calls", "Network"),
         t("calls.turn_password", "TURN password", "", "calls", "Network"),
-        t("calls.turn_secret", "TURN shared secret", "For time-limited credentials, as used by coturn and eturnal", "calls", "Network", "", true),
-        i("calls.turn_ttl", "TURN credential lifetime", "Seconds; used with the shared secret", "calls", "Network", 86400, 300, 604800, 3600, "seconds", true),
-        b("calls.relay_only", "Always relay calls", "Use TURN even when a direct connection is possible", "calls", "Network", true, true),
+        t("calls.turn_secret", "TURN shared secret", "For time-limited credentials, as used by coturn and eturnal", "calls", "Network"),
+        i("calls.turn_ttl", "TURN credential lifetime", "Seconds; used with the shared secret", "calls", "Network", 86400, 300, 604800, 3600, "seconds"),
+        b("calls.relay_only", "Always relay calls", "Use TURN even when a direct connection is possible", "calls", "Network"),
         c("calls.ringtone", "Ringtone", "Played while an incoming call is ringing", "calls", "Sounds", "ward",
             "ward" to "Ward default", "system" to "System default", "none" to "Silent"),
         c("calls.ringback", "Calling tone", "Played while an outgoing call is ringing", "calls", "Sounds", "ward",
             "ward" to "Ward default", "system" to "System default", "none" to "Silent"),
 
-        b("notify.enabled", "Notifications", "", "notifications", "Notifications", true),
-        c("notify.content", "Show in notification", "", "notifications", "Notifications", "full", "full" to "Sender and text", "sender" to "Sender only", "nothing" to "Nothing"),
+        // --------------------------------------------------------- Attachments
+        c("attachments.image_compression", "Image compression", "Compress outgoing photos before upload", "attachments", "Sending", "large",
+            "off" to "Off", "large" to "Large images only", "always" to "Always"),
+        c("attachments.video_quality", "Video quality", "Quality used when preparing outgoing videos", "attachments", "Sending", "medium",
+            "low" to "Low (240p)", "medium" to "Medium (360p)", "high" to "High (720p)", "original" to "Original"),
+        c("attachments.auto_download", "Automatic download", "Maximum file size downloaded automatically", "attachments", "Receiving", 1024,
+            0 to "Never", 256 to "256 KiB", 1024 to "1024 KiB", 5120 to "5 MiB", 20480 to "20 MiB"),
+        b("attachments.accept_unmetered", "Always accept when unmetered", "Don't use the size limit on Wi-Fi and other unmetered networks", "attachments", "Receiving", true),
+        b("attachments.hide_gallery", "Hide media from the gallery", "Keep received and sent media out of system gallery apps", "attachments", "Receiving"),
+
+        // ------------------------------------------------------- Notifications
+        b("notify.enabled", "Notifications", "Show a notification when a message arrives", "notifications", "Notifications", true),
+        c("notify.content", "Show in notification", "", "notifications", "Notifications", "full",
+            "full" to "Sender and text", "sender" to "Sender only", "nothing" to "Nothing"),
         b("notify.hide_encrypted", "Hide text for encrypted chats", "", "notifications", "Notifications", true),
-        c("notify.groups", "Group chats", "", "notifications", "Notifications", "mentions", "all" to "All messages", "mentions" to "Mentions and replies", "none" to "None"),
-        l("notify.highlight_words", "Highlight words", "Your nickname always counts; one word per line", "notifications", "Notifications"),
-        SettingSpec("notify.quiet_hours", "Quiet hours", "No sounds or pop-ups in this daily range", "notifications", "Notifications", SettingType.TIME_RANGE, ""),
+        c("notify.groups", "Group chats", "", "notifications", "Notifications", "mentions",
+            "all" to "All messages", "mentions" to "Mentions and replies", "none" to "None"),
+        l("notify.highlight_words", "Highlight words", "Your nickname always counts; one word per line", "notifications", "Highlights", defaultHighlightWords),
+        SettingSpec("notify.quiet_hours", "Daily quiet hours", "Silence notifications in this range, for example 22:00-07:00", "notifications", "Quiet hours", SettingType.TIME_RANGE, ""),
         b("notify.badge", "Unread count on the app icon", "", "notifications", "Notifications", true),
-        b("notify.sounds", "Sounds", "", "notifications", "Sounds", true),
+        b("notify.sounds", "Notification sounds", "Play a sound for new messages outside quiet hours", "notifications", "Sounds", true),
 
-        c("encryption.default", "Default encryption", "Each account and chat can override this", "encryption", "Encryption", "always", "always" to "Always (recommended)", "available" to "When available", "off" to "Off"),
-        c("encryption.trust", "Trust new devices", "", "encryption", "Encryption", "btbv", "btbv" to "Blind trust before verification", "manual" to "Ask every time"),
-        c("encryption.new_device_notice", "Tell me about new devices", "", "encryption", "Encryption", "banner", "banner" to "Chat banner", "notify" to "Banner and notification"),
-        c("encryption.inactive_days", "Mark devices inactive after", "", "encryption", "Encryption", 90, 30 to "30 days", 90 to "90 days", 180 to "180 days", 0 to "Never"),
-        b("encryption.legacy_omemo", "Allow OMEMO (legacy 0.3)", "Required for Default (OMEMO) and most other apps", "encryption", "Encryption", true),
-        b("encryption.limit_legacy_extras", "Limit unencrypted extras with legacy OMEMO", "Legacy OMEMO only encrypts the text: don’t send reactions or typing", "encryption", "Encryption", false, true),
+        // ---------------------------------------------------------- Encryption
+        c("encryption.default", "Default encryption", "Used for new chats; each chat can override it", "encryption", "Encryption", "always",
+            "always" to "Always (recommended)", "available" to "When available", "off" to "Off"),
+        c("encryption.trust", "Trust new devices", "What Ward does the first time a contact adds a device", "encryption", "Encryption", "btbv",
+            "btbv" to "Blind trust before verification", "manual" to "Ask every time"),
+        b("encryption.legacy_omemo", "Allow OMEMO (legacy 0.3)", "Required for Default (OMEMO) and most other XMPP apps", "encryption", "Encryption", true),
         b("pgp.enabled", "OpenPGP", "Optional end-to-end encryption with GnuPG keys (XEP-0373)", "encryption", "OpenPGP"),
-        b("privacy.strip_metadata", "Strip image location and camera data", "Before sending a photo", "encryption", "Privacy", true),
-        c("privacy.strangers", "Messages from strangers", "", "encryption", "Privacy", "requests", "requests" to "Requests folder", "block" to "Block", "allow" to "Allow"),
-        b("privacy.stranger_media", "Load images and previews from strangers", "", "encryption", "Privacy"),
 
-        c("storage.cache_limit", "Cache size limit", "Downloaded files, thumbnails, avatars and previews", "storage", "Cache", 1_000_000_000, 250_000_000 to "250 MB", 1_000_000_000 to "1 GB", 5_000_000_000 to "5 GB", 0 to "Unlimited"),
-        c("storage.delete_files_after", "Delete downloaded files after", "", "storage", "Cache", 0, 30 to "30 days", 90 to "90 days", 365 to "365 days", 0 to "Never"),
+        // ------------------------------------------------------------- Privacy
+        b("privacy.strip_metadata", "Strip photo location and camera data", "Remove EXIF metadata before sending an image", "privacy", "Photos", true),
+        c("privacy.strangers", "Messages from strangers", "What to do when someone you have not added writes to you", "privacy", "Strangers", "requests",
+            "requests" to "Requests folder", "block" to "Block", "allow" to "Allow"),
 
-        b("advanced.devtools", "Developer tools", "XML console, service discovery and PEP browser", "advanced", "Developer"),
-        c("advanced.debug_log", "Debug log", "", "advanced", "Developer", "off", "off" to "Off", "normal" to "Normal", "verbose" to "Verbose"),
-        i("advanced.keepalive", "Keepalive ping interval", "", "advanced", "Connection", 60, 30, 600, 30, "seconds"),
-        i("advanced.reconnect_cap", "Reconnect delay cap", "", "advanced", "Connection", 5, 1, 30, 1, "minutes"),
-        c("advanced.ip_preference", "Internet protocol", "", "advanced", "Connection", "auto", "auto" to "Automatic", "ipv4" to "Prefer IPv4", "ipv6" to "Prefer IPv6"),
-        i("advanced.spk_rotation_days", "Signed prekey rotation", "", "advanced", "OMEMO", 7, 7, 30, 1, "days"),
-        i("advanced.prekey_threshold", "Refill prekeys below", "", "advanced", "OMEMO", 99, 25, 99, 1)
+        // ------------------------------------------------------------ Advanced
+        i("advanced.keepalive", "Keepalive ping interval", "Seconds between pings that keep the connection alive", "advanced", "Connection", 60, 30, 600, 30, "seconds"),
+        i("advanced.reconnect_cap", "Reconnect delay cap", "Longest wait between reconnection attempts", "advanced", "Connection", 5, 1, 30, 1, "minutes")
     )
     val byKey = specs.associateBy { it.key }
     fun defaults(): Map<String, Any> = specs.associate { it.key to it.default }

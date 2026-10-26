@@ -78,9 +78,18 @@ class WardService : Service() {
             mgr.createNotificationChannel(NotificationChannel("connection", "Connection", NotificationManager.IMPORTANCE_MIN).apply {
                 setShowBadge(false)
             })
-            mgr.createNotificationChannel(NotificationChannel("messages", "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
-                enableVibration(true)
-            })
+            fun messageChannel(id: String, name: String, quiet: Boolean, badge: Boolean) {
+                mgr.createNotificationChannel(NotificationChannel(id, name,
+                    if (quiet) NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_HIGH).apply {
+                    enableVibration(!quiet)
+                    if (quiet) setSound(null, null)
+                    setShowBadge(badge)
+                })
+            }
+            messageChannel("messages", "Messages", quiet = false, badge = true)
+            messageChannel("messages-quiet", "Messages during quiet hours", quiet = true, badge = true)
+            messageChannel("messages-nobadge", "Messages without app-icon badge", quiet = false, badge = false)
+            messageChannel("messages-quiet-nobadge", "Quiet messages without app-icon badge", quiet = true, badge = false)
         }
     }
 
@@ -102,6 +111,19 @@ class WardService : Service() {
             .build()
     }
 
+    /** Parse a 24-hour "HH:MM-HH:MM" range, including ranges that cross midnight. */
+    private fun inQuietHours(): Boolean {
+        val raw = core.settings.string("notify.quiet_hours").trim()
+        val match = Regex("^(\\d{1,2}):(\\d{2})\\s*-\\s*(\\d{1,2}):(\\d{2})$").find(raw) ?: return false
+        val (h1, m1, h2, m2) = match.destructured
+        val start = (h1.toIntOrNull() ?: return false) * 60 + (m1.toIntOrNull() ?: return false)
+        val end = (h2.toIntOrNull() ?: return false) * 60 + (m2.toIntOrNull() ?: return false)
+        if (start !in 0..1439 || end !in 0..1439 || start == end) return false
+        val now = java.util.Calendar.getInstance()
+        val minute = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+        return if (start < end) minute in start until end else minute >= start || minute < end
+    }
+
     private fun notifyMessage(msg: MessageEntity, chat: ChatEntity, acc: AccountEntity) {
         if (chat.mutedUntil == -1L || chat.mutedUntil > System.currentTimeMillis()) return
         if (chat.isGroup) {
@@ -110,6 +132,9 @@ class WardService : Service() {
                 "mentions" -> if (!msg.mentionsMe) return
             }
         }
+        val quiet = inQuietHours()
+        val sounds = core.settings.bool("notify.sounds") && !quiet
+        val badge = core.settings.bool("notify.badge")
         val content = core.settings.string("notify.content", "full")
         val title = if (chat.isGroup) "${chat.displayName} · ${msg.senderName}" else chat.displayName
         val body = when {
@@ -121,7 +146,13 @@ class WardService : Service() {
         val notificationId = MESSAGE_NOTIFICATION_BASE + chat.id.toInt()
         val pi = PendingIntent.getActivity(this, notificationId, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val n = NotificationCompat.Builder(this, "messages")
+        val channel = when {
+            quiet && badge -> "messages-quiet"
+            quiet -> "messages-quiet-nobadge"
+            badge -> "messages"
+            else -> "messages-nobadge"
+        }
+        val builder = NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(title)
             .setContentText(body)
@@ -129,8 +160,14 @@ class WardService : Service() {
             .setContentIntent(pi)
             .setAutoCancel(true)
             .setGroup("ward-messages")
-            .build()
-        getSystemService(NotificationManager::class.java).notify(notificationId, n)
+            .setSilent(!sounds)
+        if (!badge) {
+            builder.setNumber(0).setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+        } else if (chat.unread > 0) {
+            builder.setNumber(chat.unread)
+        }
+        if (quiet) builder.setPriority(NotificationCompat.PRIORITY_LOW)
+        getSystemService(NotificationManager::class.java).notify(notificationId, builder.build())
     }
 
     companion object {
@@ -143,6 +180,12 @@ class WardService : Service() {
             runCatching {
                 if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
             }
+        }
+
+        /** Stop background delivery and close the live connections. */
+        fun stop(context: Context) {
+            runCatching { context.stopService(Intent(context, WardService::class.java)) }
+            runCatching { WardCore.get().allSessions().forEach { it.stop() } }
         }
     }
 }

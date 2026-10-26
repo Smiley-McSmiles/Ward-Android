@@ -5,11 +5,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -105,9 +108,22 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            Text(if (own) "Your devices and encryption keys" else "Devices and keys", style = MaterialTheme.typography.titleLarge)
-            Text("Fingerprints are shown in the format Conversations, Gajim and Ward use.", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(if (own) "Your devices and encryption keys" else "Devices and keys",
+                        style = MaterialTheme.typography.titleLarge)
+                    Text("Fingerprints use the same format as Conversations, Gajim and Ward.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        vm.core.session(accountId)?.refreshOmemoDevices(jid)
+                        vm.loadDevices(accountId, jid)
+                        busy = false
+                    }
+                }) { Icon(Icons.Filled.Refresh, "Refresh device list") }
+            }
             Spacer(Modifier.height(10.dp))
             if (devices.isEmpty()) {
                 Text("No OMEMO devices have been published for this address yet.", Modifier.padding(16.dp),
@@ -154,17 +170,27 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                     Spacer(Modifier.height(6.dp))
                     HorizontalDivider()
                     ListItem(
-                        headlineContent = { Text("Clean up old legacy devices…") },
-                        supportingContent = { Text("Keep only this device in your published OMEMO 0.3 device list") },
+                        headlineContent = { Text("Clean up old keys and devices…") },
+                        supportingContent = { Text("Read the server’s device lists, remove orphaned keys, then republish this device") },
                         leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },
-                        modifier = Modifier.clickable { cleanConfirm = true })
+                        modifier = Modifier.clickable(enabled = !busy) { cleanConfirm = true })
                     if (busy) {
                         Spacer(Modifier.height(8.dp))
                         LinearProgressIndicator(Modifier.fillMaxWidth())
                     }
                     if (message.isNotBlank()) {
-                        Text(message, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                        Surface(shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.inverseSurface,
+                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Info, null, Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.inversePrimary)
+                                Spacer(Modifier.width(10.dp))
+                                Text(message, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.inverseOnSurface)
+                            }
+                        }
                     }
                 }
             }
@@ -173,10 +199,11 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
 
     if (cleanConfirm) {
         AlertDialog(onDismissRequest = { cleanConfirm = false },
-            title = { Text("Clean up old legacy devices?") },
-            text = { Text("This publishes a legacy OMEMO (0.3) device list containing only this phone. " +
-                "Old installs and resets will stop receiving new messages. Contacts may need to reopen the chat " +
-                "so they fetch the new list. OMEMO 2 devices are not affected.") },
+            title = { Text("Clean up old keys and devices?") },
+            text = { Text("Ward reads the published device lists from the server first. Legacy OMEMO is republished " +
+                "with only this phone, while OMEMO 2 keeps other phones that are still published and removes " +
+                "orphaned bundles plus local keys for devices that are gone. Old installs will stop receiving " +
+                "new messages; contacts may need to reopen the chat so they fetch the new list.") },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
                     cleanConfirm = false
@@ -184,7 +211,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                     message = ""
                     scope.launch {
                         val result = runCatching {
-                            vm.core.session(accountId)?.cleanUpLegacyDevices() ?: "Not connected"
+                            withContext(Dispatchers.IO) { vm.core.session(accountId)?.cleanUpDevices() ?: "Not connected" }
                         }.getOrElse { it.message ?: "Could not clean up devices" }
                         busy = false
                         message = result
@@ -270,7 +297,21 @@ private fun DeviceRow(vm: AppViewModel, accountId: Long, jid: String, d: DeviceE
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (d.thisDevice) "This device" else "Device ${d.deviceId}", style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f))
-                AssistChip(onClick = {}, label = { Text(d.trust.replaceFirstChar { it.uppercase() }) })
+                val trustColor = when (d.trust) {
+                    "verified", "trusted" -> MaterialTheme.colorScheme.primaryContainer
+                    "distrusted" -> MaterialTheme.colorScheme.errorContainer
+                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                }
+                Surface(shape = CircleShape, color = trustColor) {
+                    Text(d.trust.replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        color = when (d.trust) {
+                            "distrusted" -> MaterialTheme.colorScheme.onErrorContainer
+                            "verified", "trusted" -> MaterialTheme.colorScheme.onPrimaryContainer
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        })
+                }
             }
             if (d.label.isNotBlank()) Text(d.label, style = MaterialTheme.typography.bodySmall)
             Text(if (d.protocol == "omemo2") "OMEMO 2" else "Legacy OMEMO", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

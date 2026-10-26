@@ -390,29 +390,36 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
         prev.attachmentsJson == "[]" && m.timestamp - prev.timestamp < 5 * 60_000 && prev.retracted == 0
     val reactions = parseReactions(m.reactionsJson)
     val layout = vm.settings.string("appearance.layout", "cozy")
-    val animateIn = remember(m.id) { System.currentTimeMillis() - m.timestamp < 2500 }
+    val compact = layout == "compact"
+    val avatarMode = vm.settings.string("appearance.avatars", "always")
+    val showMessageAvatar = (avatarMode == "always" || (avatarMode == "groups" && chat.isGroup)) && !compact
+    val showSender = !compact
+    val animateIn = remember(m.id) {
+        vm.settings.bool("appearance.message_animations") && System.currentTimeMillis() - m.timestamp < 2500
+    }
     val enter = remember(m.id) { androidx.compose.animation.core.Animatable(if (animateIn) 0f else 1f) }
     LaunchedEffect(m.id) { if (animateIn) enter.animateTo(1f, androidx.compose.animation.core.tween(220)) }
     val bubble = layout == "bubbles"
     val name = if (chat.isGroup) m.senderName else if (outgoing) "You" else (contact?.name ?: m.senderName)
-    val color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+    val color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
     Row(modifier.fillMaxWidth()
             .graphicsLayer { alpha = enter.value; translationY = (1f - enter.value) * 45f }
-            .padding(horizontal = 10.dp, vertical = if (grouping) 1.dp else 5.dp),
+            .padding(horizontal = 10.dp, vertical = if (grouping || compact) 1.dp else 5.dp),
         horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
-        if (!outgoing && !grouping) Avatar(name, 34,
+        if (!outgoing && !grouping && showMessageAvatar) Avatar(name, 34,
             photo = if (chat.isGroup) chat.avatar else contact?.avatar ?: chat.avatar,
-            show = if (chat.isGroup) null else contact?.presence) else if (!outgoing) Spacer(Modifier.width(34.dp))
-        Spacer(Modifier.width(8.dp))
+            show = if (chat.isGroup) null else contact?.presence)
+        else if (!outgoing && (grouping || !showMessageAvatar)) Spacer(Modifier.width(if (grouping) 34.dp else 0.dp))
+        Spacer(Modifier.width(if (showMessageAvatar || outgoing) 8.dp else 0.dp))
         Column(Modifier.widthIn(max = 560.dp)) {
-            if (!grouping && !outgoing) {
+            if (!grouping && !outgoing && showSender) {
                 Text(name, color = parseColor(Colors.forJid(m.senderJid.ifBlank { m.sender })), fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp, modifier = Modifier.padding(start = if (bubble) 10.dp else 0.dp))
             }
             val singleLine = m.body.isNotBlank() && !m.body.contains('\n') && m.body.length <= 42 &&
                 m.attachmentsJson == "[]" && m.replyTo.isBlank() && m.retracted == 0
             val shape = when {
-                !bubble -> RoundedCornerShape(12.dp)
+                !bubble -> RoundedCornerShape(if (compact) 8.dp else 12.dp)
                 singleLine -> RoundedCornerShape(50)
                 else -> RoundedCornerShape(26.dp)
             }
@@ -437,7 +444,8 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
             Surface(color = color, shape = shape,
                 tonalElevation = 0.dp,
                 modifier = swipeModifier.combinedClickable(onLongClick = onLongPress, onClick = {})) {
-                Column(Modifier.padding(horizontal = if (bubble) 14.dp else 8.dp, vertical = if (bubble) 10.dp else 4.dp)) {
+                Column(Modifier.padding(horizontal = if (bubble) 14.dp else 8.dp,
+                    vertical = if (bubble) 10.dp else if (compact) 2.dp else 4.dp)) {
                     if (m.replyTo.isNotBlank()) {
                         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(6.dp),
                             modifier = Modifier.fillMaxWidth().padding(bottom = 5.dp)) {
@@ -479,8 +487,9 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                                 Modifier.size(11.dp), tint = if (m.trust == "verified") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Spacer(Modifier.width(4.dp))
+                        val timeFormat = vm.settings.string("appearance.time_format", "system")
                         Text(TimeUtil.clock(m.timestamp, vm.settings.bool("appearance.time_seconds"),
-                            vm.settings.string("appearance.time_format") == "12"), fontSize = 10.sp,
+                            when (timeFormat) { "12" -> true; "24" -> false; else -> null }), fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (outgoing) {
                             Spacer(Modifier.width(4.dp))
@@ -646,7 +655,9 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
                 if (msg.direction == 1 && msg.kind != "file") SheetAction(Icons.Filled.Edit, "Edit") { onEdit(msg) }
                 SheetAction(Icons.Filled.ContentCopy, "Copy text") { onCopy(msg) }
                 SheetAction(Icons.Filled.Forward, "Forward") { onForward(msg) }
-                if (msg.direction == 1) SheetAction(Icons.Filled.Delete, "Delete for everyone") { confirmDelete = true }
+                if (msg.direction == 1) SheetAction(Icons.Filled.Delete, "Delete for everyone") {
+                    if (vm.settings.bool("chats.confirm_delete")) confirmDelete = true else { vm.retract(msg, true); onDismiss() }
+                }
                 SheetAction(Icons.Filled.DeleteOutline, "Delete for me") {
                     vm.retract(msg, false); onDismiss()
                 }

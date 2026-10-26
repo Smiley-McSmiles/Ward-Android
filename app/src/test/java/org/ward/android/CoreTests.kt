@@ -7,6 +7,7 @@ import org.jivesoftware.smack.packet.StandardExtensionElement
 import org.jivesoftware.smack.util.PacketParserUtils
 import org.junit.Assert.*
 import org.junit.Test
+import org.ward.android.data.SettingsSchema
 import org.ward.android.util.FileCrypto
 import org.ward.android.xmpp.ExternalServicesIq
 import org.ward.android.xmpp.JingleIqs
@@ -22,6 +23,26 @@ import org.ward.android.xmpp.guessMime
 import java.io.File
 
 class CoreTests {
+    @Test fun settingsHaveOneHomeAndNoDeadControls() {
+        val keys = SettingsSchema.specs.map { it.key }
+        assertEquals(keys.size, keys.toSet().size)
+        val pages = SettingsSchema.pages.map { it.first }.toSet()
+        assertTrue(SettingsSchema.specs.all { it.page in pages })
+
+        val groups = SettingsSchema.specs.groupBy { it.page }.mapValues { (_, v) -> v.map { it.group }.toSet() }
+        assertEquals(setOf("Calls", "Audio", "Network", "Sounds"), groups["calls"])
+        assertEquals(setOf("Sending", "Receiving"), groups["attachments"])
+        assertEquals(setOf("Photos", "Strangers"), groups["privacy"])
+        assertTrue("Background" in groups["general"].orEmpty())
+        assertTrue("Encryption" in groups["encryption"].orEmpty())
+
+        // Controls removed from Android because they never had an effect here.
+        val removed = listOf("general.tray", "general.confirm_quit", "chats.toolbar",
+            "appearance.message_font", "calls.mic_gain", "storage.cache_limit",
+            "advanced.ip_preference")
+        for (key in removed) assertFalse(key, SettingsSchema.specs.any { it.key == key })
+    }
+
     @Test fun mediaUrlsInMessageBodyBecomeAttachments() {
         val body = "Look at this\nhttps://upload.example.org/file.mp4?token=abc"
         val atts = attachmentsFromBody(body)

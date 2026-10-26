@@ -1,19 +1,31 @@
 package org.ward.android.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.runtime.SideEffect
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import org.ward.android.data.SettingsStore
 
@@ -23,47 +35,147 @@ private val accents = mapOf(
     "pink" to Color(0xFFD56199), "purple" to Color(0xFF9141AC), "slate" to Color(0xFF6F8396)
 )
 
+private fun tint(accent: Color, base: Color, alpha: Float): Color =
+    accent.copy(alpha = alpha.coerceIn(0f, 1f)).compositeOver(base)
+
+/**
+ * Every Material 3 colour role is filled here. The previous theme only set a handful of roles,
+ * so cards, sheets and sliders inherited the default purple-tinted baseline containers and showed
+ * up as mismatched panels against the app background.
+ */
 @Composable
 fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
     val settingsState by settings.state.collectAsState()
     val style = settingsState["appearance.style"] ?: "system"
     val dark = when (style) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
     val accent = accents[settingsState["appearance.accent"] ?: "blue"] ?: Color(0xFF3584E4)
-    val surface = if (dark) Color(0xFF1E1E1E) else Color(0xFFFDFDFD)
-    val background = if (dark) Color(0xFF171717) else Color(0xFFF6F5F4)
-    val tintAlpha = if (dark) 0.34f else 0.18f
-    val primaryContainer = accent.copy(alpha = tintAlpha).compositeOver(surface)
-    val secondaryContainer = accent.copy(alpha = tintAlpha * 0.80f).compositeOver(surface)
-    val tertiaryContainer = accent.copy(alpha = tintAlpha * 1.25f).compositeOver(surface)
-    val onContainer = if (dark) Color(0xFFF4F1F7) else Color(0xFF1C1B1F)
-    val onAccent = if (accent.luminance() > 0.55f) Color(0xFF1C1B1F) else Color.White
-    val colors = if (dark) darkColorScheme(
-        primary = accent, onPrimary = onAccent,
-        primaryContainer = primaryContainer, onPrimaryContainer = onContainer,
-        secondary = accent, onSecondary = onAccent,
-        secondaryContainer = secondaryContainer, onSecondaryContainer = onContainer,
-        tertiaryContainer = tertiaryContainer, onTertiaryContainer = onContainer,
-        surface = surface, background = background, surfaceVariant = Color(0xFF2C2C2C)
-    ) else lightColorScheme(
-        primary = accent, onPrimary = onAccent,
-        primaryContainer = primaryContainer, onPrimaryContainer = onContainer,
-        secondary = accent, onSecondary = onAccent,
-        secondaryContainer = secondaryContainer, onSecondaryContainer = onContainer,
-        tertiaryContainer = tertiaryContainer, onTertiaryContainer = onContainer,
-        surface = surface, background = background, surfaceVariant = Color(0xFFEEEDEB)
+    val onAccent = if (accent.luminance() > 0.52f) Color(0xFF15161A) else Color.White
+
+    val colors = if (dark) {
+        val background = Color(0xFF101115)
+        val surface = Color(0xFF15161B)
+        val surfaceVariant = Color(0xFF2D2F36)
+        darkColorScheme(
+            primary = accent,
+            onPrimary = onAccent,
+            primaryContainer = tint(accent, surface, 0.30f),
+            onPrimaryContainer = Color(0xFFF1EFF6),
+            inversePrimary = tint(accent, Color.White, 0.12f),
+            secondary = accent,
+            onSecondary = onAccent,
+            secondaryContainer = tint(accent, surface, 0.20f),
+            onSecondaryContainer = Color(0xFFEDEAF2),
+            tertiary = Color(0xFF8ED8CF),
+            onTertiary = Color(0xFF003733),
+            tertiaryContainer = tint(Color(0xFF8ED8CF), surface, 0.22f),
+            onTertiaryContainer = Color(0xFFD8F6F1),
+            background = background,
+            onBackground = Color(0xFFE7E4EC),
+            surface = surface,
+            onSurface = Color(0xFFE7E4EC),
+            surfaceVariant = surfaceVariant,
+            onSurfaceVariant = Color(0xFFC5C4CE),
+            surfaceTint = accent,
+            inverseSurface = Color(0xFFE7E4EC),
+            inverseOnSurface = Color(0xFF2E3036),
+            error = Color(0xFFFFB4AB),
+            onError = Color(0xFF690005),
+            errorContainer = Color(0xFF93000A),
+            onErrorContainer = Color(0xFFFFDAD6),
+            outline = Color(0xFF8F909A),
+            outlineVariant = Color(0xFF44464F),
+            scrim = Color.Black,
+            surfaceBright = Color(0xFF33343B),
+            surfaceDim = Color(0xFF101115),
+            surfaceContainerLowest = Color(0xFF0B0C0F),
+            surfaceContainerLow = Color(0xFF1A1B21),
+            surfaceContainer = Color(0xFF1E1F25),
+            surfaceContainerHigh = Color(0xFF25262D),
+            surfaceContainerHighest = Color(0xFF2D2E36)
+        )
+    } else {
+        val background = Color(0xFFF6F6FA)
+        val surface = Color(0xFFFCFCFF)
+        val surfaceVariant = Color(0xFFE3E2E9)
+        lightColorScheme(
+            primary = accent,
+            onPrimary = onAccent,
+            primaryContainer = tint(accent, Color.White, 0.16f),
+            onPrimaryContainer = Color(0xFF15161A),
+            inversePrimary = tint(accent, Color.Black, 0.18f),
+            secondary = tint(accent, Color.Black, 0.22f),
+            onSecondary = Color.White,
+            secondaryContainer = tint(accent, Color.White, 0.10f),
+            onSecondaryContainer = Color(0xFF15161A),
+            tertiary = Color(0xFF006A60),
+            onTertiary = Color.White,
+            tertiaryContainer = tint(Color(0xFF006A60), Color.White, 0.14f),
+            onTertiaryContainer = Color(0xFF00201C),
+            background = background,
+            onBackground = Color(0xFF1A1B20),
+            surface = surface,
+            onSurface = Color(0xFF1A1B20),
+            surfaceVariant = surfaceVariant,
+            onSurfaceVariant = Color(0xFF46464F),
+            surfaceTint = accent,
+            inverseSurface = Color(0xFF2F3036),
+            inverseOnSurface = Color(0xFFF1F0F7),
+            error = Color(0xFFBA1A1A),
+            onError = Color.White,
+            errorContainer = Color(0xFFFFDAD6),
+            onErrorContainer = Color(0xFF410002),
+            outline = Color(0xFF767680),
+            outlineVariant = Color(0xFFC7C5D0),
+            scrim = Color.Black,
+            surfaceBright = Color(0xFFFFFFFF),
+            surfaceDim = Color(0xFFD9D9E0),
+            surfaceContainerLowest = Color(0xFFFFFFFF),
+            surfaceContainerLow = Color(0xFFF2F2F7),
+            surfaceContainer = Color(0xFFEDEDF3),
+            surfaceContainerHigh = Color(0xFFE7E7EE),
+            surfaceContainerHighest = Color(0xFFE1E1E9)
+        )
+    }
+
+    val shapes = Shapes(
+        extraSmall = RoundedCornerShape(8.dp),
+        small = RoundedCornerShape(12.dp),
+        medium = RoundedCornerShape(18.dp),
+        large = RoundedCornerShape(26.dp),
+        extraLarge = RoundedCornerShape(34.dp)
     )
+    val typography = Typography(
+        headlineSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-0.2).sp),
+        titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = (-0.1).sp),
+        titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 24.sp),
+        titleSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.1.sp),
+        bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp, letterSpacing = 0.15.sp),
+        bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.2.sp),
+        bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 17.sp, letterSpacing = 0.25.sp),
+        labelLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.1.sp),
+        labelMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.35.sp)
+    )
+
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = view.context.findActivity()?.window ?: return@SideEffect
-            window.statusBarColor = colors.surface.toArgb()
-            window.navigationBarColor = colors.surface.toArgb()
+            window.statusBarColor = colors.background.toArgb()
+            window.navigationBarColor = colors.background.toArgb()
             val controller = WindowCompat.getInsetsController(window, view)
             controller.isAppearanceLightStatusBars = !dark
             controller.isAppearanceLightNavigationBars = !dark
         }
     }
-    MaterialTheme(colorScheme = colors, typography = Typography(), content = content)
+
+    val baseDensity = LocalDensity.current
+    val textScale = (settingsState["appearance.text_scale"]?.toFloatOrNull() ?: 100f).coerceIn(80f, 200f) / 100f
+    CompositionLocalProvider(
+        LocalDensity provides Density(baseDensity.density, baseDensity.fontScale * textScale),
+        LocalAvatarShapeRounded provides (settingsState["appearance.avatar_shape"] == "rounded")
+    ) {
+        MaterialTheme(colorScheme = colors, typography = typography, shapes = shapes, content = content)
+    }
 }
 
 private fun Context.findActivity(): Activity? = when (this) {

@@ -11,6 +11,7 @@ tracks the desktop feature set and what the Android front end does today.
 | Self-signed certificate handling | Trust on first use, with the server fingerprint in the XML log |
 | Roster, presence, subscriptions, blocking | Yes |
 | Contacts, contact requests, rename, groups | Yes |
+| Profile photos: PEP (XEP-0084) and vCard fallback (XEP-0153) | Yes, cached locally and shown in chats |
 | One-to-one chats, carbons, MAM catch-up, history | Yes |
 | Markdown, code blocks, quotes, lists, tables, links | Yes |
 | Replies, reactions, edits, retractions, receipts, read markers | Yes |
@@ -24,13 +25,13 @@ tracks the desktop feature set and what the Android front end does today.
 | User counts, online/registered user lists, uptime, account invites | Yes |
 | XML console, service discovery browser, debug log | Yes |
 | Notifications, background connection, boot autostart | Yes |
-| Preferences generated from a typed schema | Yes |
+| Preferences generated from a typed schema | Yes, grouped by General, Appearance, Chats, Calls, Attachments, Notifications, Encryption, Privacy, Security, Accounts, Storage and Advanced |
 | OMEMO (XEP-0384 legacy), device fingerprints, trust, BTBV | Yes |
 | OMEMO 2 / SCE (XEP-0384 v0.8) | Yes: one-to-one, Ed25519 device bundles, SCE payloads, encrypted replies/reactions/edits/retractions; legacy OMEMO 0.3 fallback for contacts with only legacy devices |
 | Encrypted files (XEP-0454 aesgcm) | Yes |
 | OpenPGP (XEP-0373/0374) | Basic XEP-0374 text, key generation, PEP key publication/fetch |
 | Voice messages | Yes |
-| Audio/video calls (Jingle, WebRTC, XEP-0353) | Yes: JMI propose/accept, Jingle session/ICE/DTLS, audio and video, mute/speaker/hangup; ringing is in-app |
+| Audio/video calls (Jingle, WebRTC, XEP-0353) | Yes: JMI propose/accept, Jingle session/ICE/DTLS, audio and video, mute/speaker/hangup; bundled Ward ringtone and dial tone with per-sound settings |
 | OMEMO 2 group encryption | Not yet |
 | Voice messages, link previews, global search, chat export | Not yet |
 | Tray icon, XDG desktop search, systemd/runit, custom CSS | Desktop-only, no Android equivalent |

@@ -160,8 +160,21 @@ class WardCore private constructor(val context: Context) {
 
     fun repairOmemo2(): String {
         val all = allSessions()
-        if (all.isEmpty()) return "No connected accounts"
+        if (all.isEmpty()) return "No connected accounts. Connect an account and try again."
         return all.joinToString("\n") { s -> s.repairOmemo2() ?: "${s.account.jid}: not connected" }
+    }
+
+    /**
+     * Reconcile local OMEMO state with the server's published device lists. This deliberately
+     * fetches from PEP first, because the local database can contain devices that were removed
+     * from the server months ago (or bundles left behind by a reset).
+     */
+    suspend fun cleanUpKeys(): String {
+        val all = allSessions()
+        if (all.isEmpty()) return "No connected accounts. Connect an account and try again."
+        val lines = mutableListOf<String>()
+        for (session in all) lines += session.cleanUpDevices()
+        return lines.joinToString("\n")
     }
 
     internal fun onState(accountId: Long, state: ConnectionState) { setState(accountId, state) }
@@ -348,11 +361,12 @@ class WardCore private constructor(val context: Context) {
         if (mime.startsWith("image/") && mime != "image/gif") {
             withContext(Dispatchers.IO) {
                 val setting = settings.string("attachments.image_compression", "large")
-                if (setting != "off") {
+                val stripMetadata = settings.bool("privacy.strip_metadata")
+                if (setting != "off" || stripMetadata) {
                     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeFile(tmp.absolutePath, options)
                     val large = tmp.length() > 1_000_000L || options.outWidth > 2000 || options.outHeight > 2000
-                    if (setting == "always" || large) {
+                    if (setting == "always" || large || stripMetadata) {
                         runCatching {
                             val bounds = BitmapFactory.Options().apply { inSampleSize = 1 }
                             while (options.outWidth / bounds.inSampleSize > 2400 || options.outHeight / bounds.inSampleSize > 2400) {
@@ -379,7 +393,7 @@ class WardCore private constructor(val context: Context) {
                             compressed.outputStream().use { out ->
                                 bitmap.compress(format, if (format == Bitmap.CompressFormat.PNG) 100 else 85, out)
                             }
-                            if (compressed.length() > 0 && (setting == "always" || compressed.length() < tmp.length())) {
+                            if (compressed.length() > 0 && (setting == "always" || compressed.length() < tmp.length() || stripMetadata)) {
                                 tmp.delete()
                                 compressed.renameTo(tmp)
                                 if (format == Bitmap.CompressFormat.JPEG) mime = "image/jpeg"

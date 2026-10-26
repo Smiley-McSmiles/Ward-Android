@@ -115,6 +115,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private val legacyDeviceRefreshes = mutableSetOf<String>()
     private val avatarWatches = mutableSetOf<String>()
     private val avatarFetches = mutableSetOf<String>()
+    private val vcardAvatarFetches = mutableSetOf<String>()
+    private val vcardAvatarMisses = mutableSetOf<String>()
     private val rooms = ConcurrentHashMap<String, MultiUserChat>()
     private val _occupants = MutableStateFlow<Map<String, List<OccupantInfo>>>(emptyMap())
     val occupants: StateFlow<Map<String, List<OccupantInfo>>> = _occupants
@@ -281,6 +283,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private fun setupRoster(conn: XMPPConnection) {
         synchronized(avatarWatches) { avatarWatches.clear() }
         synchronized(avatarFetches) { avatarFetches.clear() }
+        synchronized(vcardAvatarFetches) { vcardAvatarFetches.clear() }
+        synchronized(vcardAvatarMisses) { vcardAvatarMisses.clear() }
         // The Roster instance is usually created when the connection is created, i.e. before this
         // method runs. Set both the static default and the existing instance to manual, otherwise
         // Smack silently rejects every incoming subscription request before the UI can see it.
@@ -357,6 +361,60 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }
     }
 
+    /** XEP-0153: a presence update can advertise a vCard photo hash instead of a PEP avatar. */
+    private fun vcardPhotoHash(p: Presence): String {
+        val xml = p.toXML(XmlEnvironment.EMPTY).toString()
+        val photo = runCatching {
+            parseXml(xml).getElementsByTagNameNS("vcard-temp:x:update", "photo").item(0)
+                as? org.w3c.dom.Element
+        }.getOrNull() ?: return ""
+        val hash = photo.textContent?.trim().orEmpty()
+        return if (hash.length in 8..128 && hash.all { it.isLetterOrDigit() }) hash else ""
+    }
+
+    private fun avatarHashCached(hash: String): Boolean {
+        val dir = File(core.context.filesDir, "avatars")
+        if (!dir.isDirectory) return false
+        return dir.listFiles()?.any { it.name.startsWith(hash.filter { c -> c.isLetterOrDigit() }) } == true
+    }
+
+    private fun fetchVCardAvatar(jid: String, hash: String) {
+        val key = "$jid|$hash"
+        synchronized(vcardAvatarMisses) { if (key in vcardAvatarMisses) return }
+        synchronized(vcardAvatarFetches) { if (!vcardAvatarFetches.add(key)) return }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val conn = connection ?: return@launch
+                val bare = runCatching { JidCreate.entityBareFrom(jid) }.getOrNull() ?: return@launch
+                val card = org.jivesoftware.smackx.vcardtemp.VCardManager.getInstanceFor(conn).loadVCard(bare)
+                val bytes = card.avatar
+                if (bytes == null || bytes.isEmpty()) {
+                    synchronized(vcardAvatarMisses) { vcardAvatarMisses.add(key) }
+                    return@launch
+                }
+                val file = avatarFile(hash, card.avatarMimeType ?: "image/jpeg")
+                file.parentFile?.mkdirs()
+                withContext(Dispatchers.IO) { file.writeBytes(bytes) }
+                val uri = Uri.fromFile(file).toString()
+                if (jid == account.jid) {
+                    val acc = core.dao.account(account.id) ?: return@launch
+                    if (acc.avatar != uri) {
+                        core.updateAccount(acc.copy(avatar = uri))
+                        account = account.copy(avatar = uri)
+                    }
+                } else {
+                    val contact = core.dao.contact(account.id, jid) ?: return@launch
+                    if (contact.avatar != uri) {
+                        core.dao.insertContact(contact.copy(avatar = uri))
+                        core.dao.chat(account.id, jid)?.let { core.dao.updateChat(it.copy(avatar = uri)) }
+                    }
+                }
+            } finally {
+                synchronized(vcardAvatarFetches) { vcardAvatarFetches.remove(key) }
+            }
+        }
+    }
+
     private fun showOf(p: Presence): String = when (p.mode ?: Presence.Mode.available) {
         Presence.Mode.chat, Presence.Mode.available -> "available"
         Presence.Mode.away -> "away"; Presence.Mode.xa -> "xa"; Presence.Mode.dnd -> "dnd"
@@ -385,6 +443,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             ChatStateManager.getInstance(conn).addChatStateListener(object : ChatStateListener {
                 override fun stateChanged(chat: Chat, state: ChatState, message: Message) {
                     val jid = message.from?.asBareJid()?.toString() ?: return
+                    if (!core.settings.bool("chats.show_typing")) return
                     scope.launch {
                         val c = core.dao.chat(account.id, jid) ?: return@launch
                         if (state == ChatState.composing) core.setTyping(c.id, c.displayName)
@@ -1951,6 +2010,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             val ownId = mgr.ownDevice.deviceId
             for (d in core.dao.devicesOnce(account.id, account.jid)) {
                 if (d.protocol == "omemo" && d.deviceId != ownId.toLong()) {
+                    forgetLegacyDevice(account.jid, d.deviceId.toInt())
                     core.dao.deleteDevice(account.id, account.jid, d.deviceId, d.protocol)
                 }
             }
@@ -1959,12 +2019,77 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }.getOrElse { "Could not clean up devices: ${it.message}" }
     }
 
+    /**
+     * Server-aware cleanup for both OMEMO generations. For legacy OMEMO the PEP device list is
+     * authoritative, so we first read it, then republish a list containing only this installation
+     * and remove the local sessions/identities for every device that is gone. For OMEMO 2 we keep
+     * the devices the server still advertises (they may be other phones) but drop orphaned bundle
+     * items and local key material that no longer belongs to any published device.
+     */
+    suspend fun cleanUpDevices(): String = withContext(Dispatchers.IO) {
+        val lines = mutableListOf<String>()
+        val own = runCatching { JidCreate.entityBareFrom(account.jid) }.getOrNull()
+
+        if (own != null) runCatching {
+            val mgr = omemo
+            if (mgr == null) {
+                lines += "Legacy OMEMO: not connected, skipped."
+            } else {
+                runCatching { mgr.requestDeviceListUpdateFor(own) }
+                val before = runCatching { mgr.getDevicesOf(own).map { it.deviceId }.toSet() }
+                    .getOrDefault(emptySet())
+                val ownId = mgr.ownDevice.deviceId
+                mgr.purgeDeviceList()
+                var removedLocal = 0
+                for (d in core.dao.devicesOnce(account.id, account.jid)) {
+                    if (d.protocol == "omemo" && d.deviceId != ownId.toLong()) {
+                        forgetLegacyDevice(account.jid, d.deviceId.toInt())
+                        core.dao.deleteDevice(account.id, account.jid, d.deviceId, d.protocol)
+                        removedLocal++
+                    }
+                }
+                val after = runCatching { mgr.getDevicesOf(own).map { it.deviceId }.toSet() }
+                    .getOrDefault(setOf(ownId))
+                core.addXmlLog(account.id, false,
+                    "Legacy OMEMO cleanup: published ${after.size} device(s), removed $removedLocal local key record(s)")
+                lines += "Legacy OMEMO: ${after.size} device(s) published (was ${before.size}); removed $removedLocal old local key record(s)."
+            }
+        }.onFailure { lines += "Legacy OMEMO: ${it.message ?: "cleanup failed"}" }
+
+        runCatching {
+            val o2 = omemo2
+            if (o2 == null) {
+                lines += "OMEMO 2: not initialised, skipped."
+            } else {
+                val result = o2.cleanUpOwnDevices()
+                var removedLocal = 0
+                for (d in core.dao.devicesOnce(account.id, account.jid)) {
+                    if (d.protocol == "omemo2" && d.deviceId.toInt() !in result.listed && d.deviceId.toInt() != o2.deviceId) {
+                        core.dao.deleteDevice(account.id, account.jid, d.deviceId, d.protocol)
+                        removedLocal++
+                    }
+                }
+                val publishNote = if (result.published) "republished" else "could not republish yet; see the XML console"
+                lines += "OMEMO 2: ${result.listed.size} device(s) $publishNote; removed ${result.removedBundles} stale bundle(s) and $removedLocal local record(s)."
+            }
+        }.onFailure { lines += "OMEMO 2: ${it.message ?: "cleanup failed"}" }
+
+        if (lines.isEmpty()) "Nothing to clean up." else lines.joinToString("\n")
+    }
+
     fun refreshOmemoDevices(jid: String) {
-        val o2 = omemo2 ?: return
-        o2.invalidateDeviceCache(jid)
+        val bare = runCatching { JidCreate.entityBareFrom(jid) }.getOrNull() ?: return
+        val o2 = omemo2
+        o2?.invalidateDeviceCache(jid)
         scope.launch(Dispatchers.IO) {
-            runCatching { o2.ensureOwnDeviceListed() }
-            runCatching { o2.loadDeviceInfo(jid) }
+            // Ask the server for both generations instead of trusting the local cache.
+            runCatching { omemo?.requestDeviceListUpdateFor(bare) }
+            runCatching { omemo?.getDevicesOf(bare) }
+            if (o2 != null) {
+                runCatching { o2.ensureOwnDeviceListed() }
+                runCatching { o2.loadDeviceInfo(jid) }
+            }
+            loadDevices(jid)
         }
     }
 

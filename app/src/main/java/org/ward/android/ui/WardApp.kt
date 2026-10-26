@@ -84,6 +84,8 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
         }
     }
     val accounts by vm.accounts.collectAsState()
+    val settingsState by vm.settings.state.collectAsState()
+    val runInBackground = settingsState["general.background"] != "false"
     val currentCall by vm.core.call.collectAsState()
     val callSounds = remember { CallSounds(context, vm.settings) }
     val ringingIncoming = currentCall?.phase == "INCOMING"
@@ -94,9 +96,10 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
         onDispose { callSounds.stop() }
     }
     var addingAccount by remember { mutableStateOf(false) }
-    LaunchedEffect(accounts.size) {
+    LaunchedEffect(accounts.size, runInBackground) {
         if (accounts.isNotEmpty()) {
-            WardService.start(vm.getApplication())
+            if (runInBackground) WardService.start(vm.getApplication())
+            else WardService.stop(vm.getApplication())
             if (initialChatId != null) vm.selectChatById(initialChatId)
             if (initialJid != null) vm.openChat(accounts.first().id, initialJid)
         }

@@ -9,7 +9,10 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             WardCore.init(context)
-            if (WardCore.get().settings.bool("general.autostart")) WardService.start(context)
+            val settings = WardCore.get().settings
+            if (settings.bool("general.autostart") && settings.bool("general.background")) {
+                WardService.start(context)
+            }
         }
     }
 }

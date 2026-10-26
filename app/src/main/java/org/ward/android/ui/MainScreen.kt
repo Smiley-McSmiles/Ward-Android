@@ -247,6 +247,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
              accountFilter: Long?, pad: PaddingValues, searchMode: Boolean, onCloseSearch: () -> Unit,
              onNewChat: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
+    val contacts by vm.contacts.collectAsState()
+    val settings by vm.settings.state.collectAsState()
     var messageResults by remember { mutableStateOf<List<org.ward.android.data.MessageEntity>>(emptyList()) }
     LaunchedEffect(search) {
         if (search.length >= 2) { kotlinx.coroutines.delay(250); messageResults = vm.core.dao.searchAll(search) }
@@ -353,8 +355,16 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                             }
                         }
                     ) {
+                        val contactPhoto = contacts.firstOrNull {
+                            it.accountId == chat.accountId && it.jid == chat.jid
+                        }?.avatar.orEmpty()
+                        val avatarMode = settings["appearance.avatars"] ?: "always"
                         ChatRow(chat, typing[chat.id] ?: "", onClick = { vm.selectChat(chat.id) },
-                            modifier = Modifier)
+                            modifier = Modifier,
+                            photo = chat.avatar.ifBlank { contactPhoto },
+                            showPreview = settings["appearance.list_previews"] != "false",
+                            compact = settings["appearance.list_density"] == "compact",
+                            showAvatar = avatarMode == "always" || (avatarMode == "groups" && chat.isGroup))
                     }
                 }
             }

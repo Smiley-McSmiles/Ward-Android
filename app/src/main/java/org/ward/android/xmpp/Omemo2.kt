@@ -693,7 +693,6 @@ class Omemo2(
                 published = true
                 configured = true
                 disk.cleanupVersion = 1
-                disk.ignoredDevices.clear()
                 if (disk.staleDeviceId != 0) disk.staleDeviceId = 0
                 save()
                 core.addXmlLog(account.id, false, "OMEMO 2 published device $deviceId")
@@ -729,8 +728,61 @@ class Omemo2(
                 }
             }
         }
-        disk.ignoredDevices = invalid.toMutableList()
+        disk.ignoredDevices = (disk.ignoredDevices + invalid).distinct().toMutableList()
         save()
+    }
+
+    data class OwnDeviceCleanup(val listed: List<Int>, val removedBundles: Int, val published: Boolean)
+
+    /**
+     * Server-aware OMEMO 2 cleanup. The published device-list item is authoritative: devices that
+     * are no longer listed keep their bundle item forever on most servers, and those orphaned
+     * bundles make clients think there is still an active device. Remove the orphaned bundles,
+     * drop local sessions/identities for them, and republish this device so it cannot be lost in
+     * the process. Devices that are still advertised are left alone: they may be other phones.
+     */
+    fun cleanUpOwnDevices(): OwnDeviceCleanup = synchronized(lock) {
+        if (!conn.isConnected) return@synchronized OwnDeviceCleanup(emptyList(), 0, false)
+        val ownJid = org.jxmpp.jid.impl.JidCreate.entityBareFrom(account.jid)
+        val published = runCatching { fetchDevices(account.jid, true) }.getOrDefault(emptyList())
+        val bundleNode = runCatching {
+            PubSubManager.getInstanceFor(conn, ownJid).getLeafNode(BUNDLES)
+        }.getOrNull()
+        val bundleIds = runCatching {
+            bundleNode?.getItems<Item>()?.mapNotNull { it.id?.toIntOrNull() }?.distinct() ?: emptyList()
+        }.getOrDefault(emptyList())
+
+        val orphaned = bundleIds.filter { it !in published && it != deviceId }
+        val invalid = published.filter { id ->
+            if (id == deviceId) false else {
+                val bundle = fetchBundle(account.jid, id) ?: return@filter false
+                val ed = bundle.identityKey.publicKey.serializeEd()
+                !runCatching { Ed25519.validatePublicKeyFull(ed, 0) }.getOrDefault(false)
+            }
+        }
+        val stale = (orphaned + invalid).distinct()
+        for (id in stale) {
+            runCatching { bundleNode?.deleteItem(id.toString()) }
+        }
+        disk.ignoredDevices = (disk.ignoredDevices + stale).distinct().toMutableList()
+        disk.ignoredDevices.remove(deviceId)
+
+        // Keep only devices that are still published (plus this installation).
+        val keep = ((published + deviceId) - invalid.toSet()).map { "$ownJid|$it" }.toSet()
+        val ownSessions = sessions.keys.filter { it.startsWith("$ownJid|") && it !in keep }
+        val ownIdentities = identities.keys.filter { it.startsWith("$ownJid|") && it !in keep }
+        val ownTrusted = trusted.keys.filter { it.startsWith("$ownJid|") && it !in keep }
+        ownSessions.forEach { sessions.remove(it); disk.sessions.remove(it) }
+        ownIdentities.forEach { identities.remove(it); disk.identities.remove(it) }
+        ownTrusted.forEach { trusted.remove(it); disk.trusted.remove(it) }
+        save()
+
+        val listed = ((published + deviceId) - invalid.toSet()).distinct().sorted()
+        core.addXmlLog(account.id, false,
+            "OMEMO 2 cleanup: ${listed.size} device(s) listed, removed ${stale.size} stale bundle(s) and " +
+                "${ownSessions.size} local session(s)")
+        val republished = publish()
+        OwnDeviceCleanup(listed, stale.size, republished)
     }
 
     private fun signedPreKey(): SignedPreKeyRecord {

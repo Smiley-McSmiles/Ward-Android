@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -163,95 +164,112 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
     var lockDelaySeconds by remember { mutableStateOf(AppLockStore.lockDelaySeconds(context)) }
 
     BackHandler { onBack() }
-    Scaffold(topBar = {
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(title = { Text("Security") }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
-        })
+        }, colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background))
     }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp)) {
-            Text("App lock", style = MaterialTheme.typography.titleLarge)
-            Text("Require a PIN, password or pattern whenever Ward opens or returns from the background.",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    AppLockStore.OFF to "Off",
-                    AppLockStore.PIN to "PIN",
-                    AppLockStore.PASSWORD to "Password",
-                    AppLockStore.PATTERN to "Pattern"
-                ).forEach { (value, label) ->
-                    FilterChip(selected = currentType == value, onClick = {
-                        if (value == AppLockStore.OFF) {
-                            AppLockStore.clear(context)
-                            currentType = AppLockStore.OFF
-                        } else {
-                            setupType = value
+        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(bottom = 34.dp)) {
+            PageIntro("security")
+            SettingsSectionLabel("App lock")
+            SettingsGroup {
+                ListItem(
+                    headlineContent = { Text("Current protection") },
+                    supportingContent = {
+                        Text(when (currentType) {
+                            AppLockStore.PIN -> "PIN"
+                            AppLockStore.PASSWORD -> "Password"
+                            AppLockStore.PATTERN -> "Pattern"
+                            else -> "Off — anyone who opens Ward can read local messages"
+                        })
+                    },
+                    leadingContent = { Icon(if (currentType == AppLockStore.OFF) Icons.Filled.LockOpen else Icons.Filled.Lock, null) })
+                SettingsDivider()
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text("Method", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            AppLockStore.OFF to "Off",
+                            AppLockStore.PIN to "PIN",
+                            AppLockStore.PASSWORD to "Password",
+                            AppLockStore.PATTERN to "Pattern"
+                        ).forEach { (value, label) ->
+                            FilterChip(selected = currentType == value, onClick = {
+                                if (value == AppLockStore.OFF) {
+                                    AppLockStore.clear(context)
+                                    currentType = AppLockStore.OFF
+                                } else {
+                                    setupType = value
+                                }
+                            }, label = { Text(label) })
                         }
-                    }, label = { Text(label) })
-                }
-            }
-            Spacer(Modifier.height(18.dp))
-            ListItem(
-                headlineContent = { Text("Current protection") },
-                supportingContent = { Text(when (currentType) {
-                    AppLockStore.PIN -> "PIN"
-                    AppLockStore.PASSWORD -> "Password"
-                    AppLockStore.PATTERN -> "Pattern"
-                    else -> "Off"
-                }) },
-                leadingContent = { Icon(Icons.Filled.Lock, null) })
-            if (currentType != AppLockStore.OFF) {
-                Text("Changing the method replaces the stored credential. Disabling the app lock removes it.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            }
-
-            Spacer(Modifier.height(22.dp))
-            Text("Failed attempts", style = MaterialTheme.typography.titleMedium)
-            Text("Lockout pauses entry after a wrong attempt. At the attempt limit, Ward deletes local encryption keys and message history.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(0 to "Never", 3 to "3 attempts", 5 to "5 attempts", 10 to "10 attempts").forEach { (value, label) ->
-                    FilterChip(selected = maxAttempts == value, onClick = {
-                        maxAttempts = value
-                        AppLockStore.setMaxAttempts(context, value)
-                        AppLockStore.clearFailures(context)
-                    }, label = { Text(label) })
-                }
-            }
-            if (maxAttempts > 0) {
-                Text("After $maxAttempts failed attempts, local keys and message history are deleted.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
-            }
-
-            Spacer(Modifier.height(18.dp))
-            Text("Lockout", style = MaterialTheme.typography.titleMedium)
-            Text("Wait before trying again after a failed unlock.", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(0 to "Off", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes", 900 to "15 minutes").forEach { (value, label) ->
-                    FilterChip(selected = lockoutSeconds == value, onClick = {
-                        lockoutSeconds = value
-                        AppLockStore.setLockoutSeconds(context, value)
-                        AppLockStore.clearFailures(context)
-                    }, label = { Text(label) })
+                    }
+                    if (currentType != AppLockStore.OFF) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Choosing another method replaces the stored credential. Turning the app lock off removes it.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            Text("Lock after leaving", style = MaterialTheme.typography.titleMedium)
-            Text("Briefly switching away can keep Ward unlocked. The lock screen appears after this delay while the app is in the background.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(0 to "Immediately", 15 to "15 seconds", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes").forEach { (value, label) ->
-                    FilterChip(selected = lockDelaySeconds == value, onClick = {
-                        lockDelaySeconds = value
-                        AppLockStore.setLockDelaySeconds(context, value)
-                    }, label = { Text(label) })
+            SettingsSectionLabel("Failed attempts")
+            SettingsGroup {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text("Lockout pauses entry after a wrong attempt. At the attempt limit, Ward deletes local encryption keys and message history.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(0 to "Never", 3 to "3 attempts", 5 to "5 attempts", 10 to "10 attempts").forEach { (value, label) ->
+                            FilterChip(selected = maxAttempts == value, onClick = {
+                                maxAttempts = value
+                                AppLockStore.setMaxAttempts(context, value)
+                                AppLockStore.clearFailures(context)
+                            }, label = { Text(label) })
+                        }
+                    }
+                    if (maxAttempts > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("After $maxAttempts failed attempts, local keys and message history are deleted.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            SettingsSectionLabel("Lockout")
+            SettingsGroup {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text("Wait before trying again after a failed unlock.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(0 to "Off", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes", 900 to "15 minutes").forEach { (value, label) ->
+                            FilterChip(selected = lockoutSeconds == value, onClick = {
+                                lockoutSeconds = value
+                                AppLockStore.setLockoutSeconds(context, value)
+                                AppLockStore.clearFailures(context)
+                            }, label = { Text(label) })
+                        }
+                    }
+                }
+            }
+
+            SettingsSectionLabel("Leaving the app")
+            SettingsGroup {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text("Briefly switching away can keep Ward unlocked. The lock screen appears after this delay while the app is in the background.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(0 to "Immediately", 15 to "15 seconds", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes").forEach { (value, label) ->
+                            FilterChip(selected = lockDelaySeconds == value, onClick = {
+                                lockDelaySeconds = value
+                                AppLockStore.setLockDelaySeconds(context, value)
+                            }, label = { Text(label) })
+                        }
+                    }
                 }
             }
         }

@@ -23,6 +23,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import kotlin.math.roundToInt
 
 class CallManager(private val session: XmppSession) {
     companion object {
@@ -154,15 +155,34 @@ class CallManager(private val session: XmppSession) {
         session.core.addXmlLog(session.account.id, false, message)
     }
 
+    private var originalVoiceVolume: Int? = null
+
     private fun setAudioMode(inCall: Boolean) {
         val am = context.getSystemService(android.media.AudioManager::class.java)
         if (inCall) {
             am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
             am.isSpeakerphoneOn = session.core.call.value?.speaker ?: true
+            applySpeakerGain(am)
         } else {
             am.isSpeakerphoneOn = false
             am.mode = android.media.AudioManager.MODE_NORMAL
+            originalVoiceVolume?.let { am.setStreamVolume(android.media.AudioManager.STREAM_VOICE_CALL, it, 0) }
+            originalVoiceVolume = null
         }
+    }
+
+    /**
+     * The speaker slider is a real call-volume multiplier rather than a decorative preference.
+     * WebRTC does not expose per-call gain, so scale the voice-call stream and restore the user's
+     * original volume when the call ends.
+     */
+    private fun applySpeakerGain(am: android.media.AudioManager) {
+        val gain = session.core.settings.int("calls.speaker_gain").takeIf { it > 0 } ?: 100
+        val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_VOICE_CALL)
+        val original = originalVoiceVolume ?: am.getStreamVolume(android.media.AudioManager.STREAM_VOICE_CALL)
+        originalVoiceVolume = original
+        val target = (original * gain / 100f).roundToInt().coerceIn(0, max)
+        runCatching { am.setStreamVolume(android.media.AudioManager.STREAM_VOICE_CALL, target, 0) }
     }
 
     fun toggleMute() {
@@ -177,6 +197,7 @@ class CallManager(private val session: XmppSession) {
         val speaker = !state.speaker
         val am = context.getSystemService(android.media.AudioManager::class.java)
         am.isSpeakerphoneOn = speaker
+        applySpeakerGain(am)
         publish(state.copy(speaker = speaker))
     }
 
