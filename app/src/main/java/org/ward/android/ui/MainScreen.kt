@@ -326,7 +326,7 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) }
                     items(messageResults.take(30), key = { "m" + it.id }) { m ->
                         val chat = chats.firstOrNull { it.id == m.chatId }
-                        ListItem(headlineContent = { Text(chat?.displayName ?: m.senderName, maxLines = 1) },
+                        PanelListItem(headlineContent = { Text(chat?.displayName ?: m.senderName, maxLines = 1) },
                             supportingContent = { Text(m.body.ifBlank { "[attachment]" }, maxLines = 2) },
                             leadingContent = { Icon(Icons.Filled.ChatBubble, null) },
                             modifier = Modifier.clickable { vm.selectChat(m.chatId) })

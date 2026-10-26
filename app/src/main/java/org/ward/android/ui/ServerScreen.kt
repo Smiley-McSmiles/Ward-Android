@@ -117,7 +117,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
         if (states[accountId]?.state != "online") {
             Spacer(Modifier.height(8.dp))
             SettingsGroup {
-                ListItem(
+                PanelListItem(
                     headlineContent = { Text("Connect to manage this server", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text(states[accountId]?.error?.takeIf { it.isNotBlank() }
                         ?: "This account is offline. Connect it to load administration commands.") },
@@ -139,7 +139,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
             if (error.isNotBlank()) {
                 item {
                     SettingsGroup {
-                        ListItem(
+                        PanelListItem(
                             headlineContent = { Text("Could not load administration", style = MaterialTheme.typography.titleMedium) },
                             supportingContent = { Text(error) },
                             leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
@@ -152,14 +152,14 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
             item {
                 SettingsGroup {
                     if (stats.isEmpty() && !loading) {
-                        ListItem(
+                        PanelListItem(
                             headlineContent = { Text("No statistics", style = MaterialTheme.typography.titleMedium) },
                             supportingContent = { Text("The server shares no numbers, or this account is not an admin.") },
                             leadingContent = { SettingsIconTile(Icons.Filled.Analytics, WardIconColors.grey) })
                     } else {
                         stats.entries.toList().forEachIndexed { index, (key, value) ->
                             if (index > 0) SettingsDivider()
-                            ListItem(
+                            PanelListItem(
                                 headlineContent = { Text(statLabel(key), style = MaterialTheme.typography.titleMedium) },
                                 leadingContent = { SettingsIconTile(statIcon(key), statColor(key)) },
                                 trailingContent = {
@@ -175,7 +175,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
             item { SettingsSectionLabel("Invites") }
             item {
                 SettingsGroup {
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Create account invite", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Generate a one-time link for a new account on this server") },
                         leadingContent = { SettingsIconTile(Icons.Filled.AddLink, WardIconColors.green) },
@@ -189,7 +189,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                             }
                         })
                     SettingsDivider()
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("How invites work", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Invite links let someone create an account on this server. Each link works once.") },
                         leadingContent = { SettingsIconTile(Icons.Filled.Link, WardIconColors.blue) })
@@ -202,7 +202,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                     SettingsGroup {
                         users.first.take(200).forEachIndexed { index, user ->
                             if (index > 0) SettingsDivider()
-                            ListItem(
+                            PanelListItem(
                                 headlineContent = { Text(user, style = MaterialTheme.typography.titleMedium) },
                                 leadingContent = { Avatar(user, 36) })
                         }
@@ -215,7 +215,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
             item {
                 SettingsGroup {
                     if (list.isEmpty() && !loading) {
-                        ListItem(
+                        PanelListItem(
                             headlineContent = { Text("No commands available", style = MaterialTheme.typography.titleMedium) },
                             supportingContent = { Text("Prosody and ejabberd expose their administration here when this account is an admin.") },
                             leadingContent = { SettingsIconTile(Icons.Filled.Terminal, WardIconColors.grey) })
@@ -223,7 +223,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                         list.forEachIndexed { index, cmd ->
                             if (index > 0) SettingsDivider()
                             val prosody = cmd.node.contains("prosody")
-                            ListItem(
+                            PanelListItem(
                                 headlineContent = { Text(cmd.name, style = MaterialTheme.typography.titleMedium) },
                                 supportingContent = { Text(cmd.node, maxLines = 2) },
                                 leadingContent = {
@@ -354,7 +354,7 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
             .navigationBarsPadding().padding(bottom = 30.dp)) {
             SettingsSectionLabel("Command")
             SettingsGroup {
-                ListItem(
+                PanelListItem(
                     headlineContent = { Text(command.name, style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text(command.node, maxLines = 2) },
                     leadingContent = { SettingsIconTile(Icons.Filled.Terminal, WardIconColors.purple) })
@@ -364,7 +364,7 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
             }
             if (error.isNotBlank()) {
                 SettingsGroup {
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Command failed", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text(error) },
                         leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
@@ -678,7 +678,7 @@ fun DiscoPage(vm: AppViewModel, onBack: () -> Unit) {
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp))
             if (error.isNotBlank()) {
                 SettingsGroup {
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Could not query the service", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text(error) },
                         leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
@@ -690,14 +690,14 @@ fun DiscoPage(vm: AppViewModel, onBack: () -> Unit) {
                 SettingsGroup {
                     val identities = discoverInfo.identities
                     if (identities.isEmpty()) {
-                        ListItem(
+                        PanelListItem(
                             headlineContent = { Text("No identities reported", style = MaterialTheme.typography.titleMedium) },
                             supportingContent = { Text("The server did not describe what this address is.") },
                             leadingContent = { SettingsIconTile(Icons.Filled.Info, WardIconColors.grey) })
                     } else {
                         identities.forEachIndexed { index, identity ->
                             if (index > 0) SettingsDivider()
-                            ListItem(
+                            PanelListItem(
                                 headlineContent = { Text("${identity.category} / ${identity.type}",
                                     style = MaterialTheme.typography.titleMedium) },
                                 supportingContent = if (identity.name.isNotBlank()) ({
@@ -729,13 +729,13 @@ fun DiscoPage(vm: AppViewModel, onBack: () -> Unit) {
                 SettingsSectionLabel("Items")
                 SettingsGroup {
                     if (itemsResult.items.isEmpty()) {
-                        ListItem(
+                        PanelListItem(
                             headlineContent = { Text("No items reported", style = MaterialTheme.typography.titleMedium) },
                             leadingContent = { SettingsIconTile(Icons.Filled.Dns, WardIconColors.grey) })
                     } else {
                         itemsResult.items.forEachIndexed { index, item ->
                             if (index > 0) SettingsDivider()
-                            ListItem(
+                            PanelListItem(
                                 headlineContent = { Text(item.entityID.toString(), style = MaterialTheme.typography.titleMedium) },
                                 supportingContent = item.node?.let { node -> { Text(node) } },
                                 leadingContent = { SettingsIconTile(Icons.Filled.Dns, WardIconColors.teal) },

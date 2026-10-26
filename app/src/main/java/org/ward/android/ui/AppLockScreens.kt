@@ -174,7 +174,7 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
             PageIntro("security")
             SettingsSectionLabel("App lock")
             SettingsGroup {
-                ListItem(
+                PanelListItem(
                     headlineContent = { Text("Current protection") },
                     supportingContent = {
                         Text(when (currentType) {

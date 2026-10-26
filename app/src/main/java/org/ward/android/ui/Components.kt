@@ -190,7 +190,7 @@ fun ChatRow(
     Surface(onClick = onClick, shape = RoundedCornerShape(20.dp),
         color = wardPanelColor(), tonalElevation = 0.dp,
         modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (compact) 1.dp else 3.dp)) {
-        ListItem(
+        PanelListItem(
             modifier = Modifier,
             leadingContent = if (showAvatar) ({ Avatar(chat.displayName, 44, photo = photo) }) else null,
             headlineContent = {
@@ -232,7 +232,7 @@ fun ContactRow(contact: ContactEntity, onClick: () -> Unit) {
     Surface(onClick = onClick, shape = RoundedCornerShape(20.dp), color = wardPanelColor(),
         tonalElevation = 0.dp,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)) {
-        ListItem(
+        PanelListItem(
             leadingContent = { Avatar(contact.name, 40, photo = contact.avatar, show = contact.presence) },
             headlineContent = { Text(contact.name, fontWeight = FontWeight.Medium) },
             supportingContent = {
@@ -262,4 +262,30 @@ fun SectionCard(content: @Composable ColumnScope.() -> Unit) {
         colors = CardDefaults.cardColors(containerColor = wardPanelColor())) {
         Column(content = content)
     }
+}
+
+
+/**
+ * A ListItem that does not paint its own surface. Group panels and cards in Ward already provide
+ * the elevated tone, so Material's default `surface` container would cover them and erase the
+ * background/panel contrast.
+ */
+@Composable
+fun PanelListItem(
+    headlineContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    supportingContent: (@Composable () -> Unit)? = null,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
+    overlineContent: (@Composable () -> Unit)? = null
+) {
+    ListItem(
+        headlineContent = headlineContent,
+        modifier = modifier,
+        overlineContent = overlineContent,
+        supportingContent = supportingContent,
+        leadingContent = leadingContent,
+        trailingContent = trailingContent,
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
 }

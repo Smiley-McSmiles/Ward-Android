@@ -135,7 +135,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
             SettingsSectionLabel("Devices")
             SettingsGroup {
                 if (devices.isEmpty()) {
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("No published devices", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("This address has not published an OMEMO device list yet.") },
                         leadingContent = { Icon(Icons.Filled.Devices, null) }
@@ -152,13 +152,13 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                 SettingsSectionLabel("Backup",
                     "Passphrase-protected files compatible with Ward for GTK. Android-to-Android restores also keep sessions.")
                 SettingsGroup {
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Export this device…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("OMEMO identity, pre-keys and sessions") },
                         leadingContent = { Icon(Icons.Filled.Download, null) },
                         modifier = Modifier.clickable { dialogKind = "export-device"; passphrase = "" })
                     SettingsDivider()
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Import a device…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Restore a device backup; use one copy at a time") },
                         leadingContent = { Icon(Icons.Filled.Upload, null) },
@@ -168,13 +168,13 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                             importFile.launch(arrayOf("application/octet-stream", "*/*"))
                         })
                     SettingsDivider()
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Export trust decisions…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Verified and distrusted keys for all accounts") },
                         leadingContent = { Icon(Icons.Filled.Download, null) },
                         modifier = Modifier.clickable { dialogKind = "export-trust"; passphrase = "" })
                     SettingsDivider()
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Import trust decisions…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Restore verification choices") },
                         leadingContent = { Icon(Icons.Filled.Upload, null) },
@@ -188,7 +188,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                 SettingsSectionLabel("Maintenance",
                     "Cleanup reads the published device lists from the server before removing anything.")
                 SettingsGroup {
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text("Clean up old keys and devices…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Remove orphaned bundles and local keys, then republish this device") },
                         leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },

@@ -796,7 +796,7 @@ private fun ForwardMessageDialog(vm: AppViewModel, msg: MessageEntity, chats: Li
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 chats.filter { it.id != msg.chatId }.forEach { target ->
                     val account = accounts.firstOrNull { it.id == target.accountId }
-                    ListItem(
+                    PanelListItem(
                         headlineContent = { Text(target.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         supportingContent = { Text(account?.jid ?: target.jid, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingContent = { Avatar(target.displayName, 32, photo = target.avatar, show = null) },
@@ -815,7 +815,7 @@ private fun ForwardMessageDialog(vm: AppViewModel, msg: MessageEntity, chats: Li
 
 @Composable
 private fun SheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    ListItem(headlineContent = { Text(label) }, leadingContent = { Icon(icon, null) },
+    PanelListItem(headlineContent = { Text(label) }, leadingContent = { Icon(icon, null) },
         modifier = Modifier.clickable(onClick = onClick))
 }
 
@@ -858,7 +858,7 @@ fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?
                 }
             }
             if (!chat.isGroup) {
-                ListItem(headlineContent = { Text("Devices and keys") }, supportingContent = { Text("Fingerprints and verification") },
+                PanelListItem(headlineContent = { Text("Devices and keys") }, supportingContent = { Text("Fingerprints and verification") },
                     leadingContent = { Icon(Icons.Filled.Key, null) }, trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                     modifier = Modifier.clickable { onDevices() })
             }
@@ -892,17 +892,17 @@ fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?
             Spacer(Modifier.height(12.dp))
             HorizontalDivider()
             if (contact != null) {
-                ListItem(headlineContent = { Text(if (contact.blocked) "Unblock" else "Block…") }, leadingContent = { Icon(Icons.Filled.Block, null) },
+                PanelListItem(headlineContent = { Text(if (contact.blocked) "Unblock" else "Block…") }, leadingContent = { Icon(Icons.Filled.Block, null) },
                     modifier = Modifier.clickable { vm.block(chat.accountId, chat.jid, !contact.blocked); onDismiss() })
-                ListItem(headlineContent = { Text("Remove from contacts…") }, leadingContent = { Icon(Icons.Filled.PersonRemove, null) },
+                PanelListItem(headlineContent = { Text("Remove from contacts…") }, leadingContent = { Icon(Icons.Filled.PersonRemove, null) },
                     modifier = Modifier.clickable { vm.removeContact(chat.accountId, chat.jid); onDismiss() })
             }
-            ListItem(headlineContent = { Text("Clear history…") }, leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },
+            PanelListItem(headlineContent = { Text("Clear history…") }, leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },
                 modifier = Modifier.clickable { vm.clearHistory(chat); onDismiss() })
             if (chat.isGroup) {
-                ListItem(headlineContent = { Text("Invite…") }, supportingContent = { Text("xmpp:${chat.jid}?join") },
+                PanelListItem(headlineContent = { Text("Invite…") }, supportingContent = { Text("xmpp:${chat.jid}?join") },
                     leadingContent = { Icon(Icons.Filled.PersonAdd, null) }, modifier = Modifier.clickable { inviteOpen = true })
-                ListItem(headlineContent = { Text("Leave group") }, leadingContent = { Icon(Icons.Filled.Logout, null) },
+                PanelListItem(headlineContent = { Text("Leave group") }, leadingContent = { Icon(Icons.Filled.Logout, null) },
                     modifier = Modifier.clickable { vm.leaveGroup(chat); onDismiss() })
             }
         }
@@ -931,7 +931,7 @@ fun MembersSheet(vm: AppViewModel, chat: ChatEntity, onDismiss: () -> Unit) {
             }
             LazyColumn(Modifier.heightIn(max = 500.dp)) {
                 items(occupants, key = { it.nick }) { o ->
-                    ListItem(headlineContent = { Text(o.nick + if (o.isSelf) " (you)" else "") },
+                    PanelListItem(headlineContent = { Text(o.nick + if (o.isSelf) " (you)" else "") },
                         supportingContent = { Text(listOf(o.role, o.affiliation).filter { it != "none" }.joinToString(", ")) },
                         leadingContent = { Avatar(o.nick, 36, show = if (o.status.isBlank()) "available" else "away") },
                         trailingContent = { if (o.role == "moderator") Icon(Icons.Filled.Star, "Moderator", tint = MaterialTheme.colorScheme.primary) },
