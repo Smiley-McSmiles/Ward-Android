@@ -97,7 +97,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onBackground) }
+            WardBackButton(onBack)
             Column(Modifier.weight(1f)) {
                 Text(acc?.domain ?: "Server", style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground)
@@ -384,7 +384,7 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
             runCatching { listState.scrollToItem(filteredLog.lastIndex) }
         }
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("XML console") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null) } },
+    Scaffold(topBar = { TopAppBar(title = { Text("XML console") }, navigationIcon = { WardBackButton(onBack) },
         actions = {
             IconButton(onClick = {
                 paused = !paused
@@ -457,7 +457,7 @@ fun DiscoPage(vm: AppViewModel, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(Unit) { query() }
-    Scaffold(topBar = { TopAppBar(title = { Text("Service discovery") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null) } }) }) { pad ->
+    Scaffold(topBar = { TopAppBar(title = { Text("Service discovery") }, navigationIcon = { WardBackButton(onBack) }) }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(12.dp)) {
             OutlinedTextField(jid, { jid = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))

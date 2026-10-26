@@ -228,7 +228,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
 private fun AddAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String,
                       modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(onClick = onClick, shape = RoundedCornerShape(34.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh, tonalElevation = 1.dp,
+        color = wardPanelColor(), tonalElevation = 0.dp,
         modifier = modifier.aspectRatio(1f)) {
         Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center) {
@@ -283,7 +283,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
         }
         val shownRequests = requests.filter { accountFilter == null || it.accountId == accountFilter }
         if (shownRequests.isNotEmpty()) {
-            Card(onClick = { vm.selectChat(shownRequests.first().chatId) }, shape = RoundedCornerShape(18.dp),
+            Card(onClick = { vm.selectChat(shownRequests.first().chatId) }, shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = wardPanelColor()),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.MarkEmailUnread, null, tint = MaterialTheme.colorScheme.primary)
@@ -481,7 +482,7 @@ fun NewChatDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: (
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(shownContacts.take(50), key = { it.accountId.toString() + it.jid }) { c ->
                         Surface(onClick = { jid = c.jid }, shape = RoundedCornerShape(18.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            color = wardPanelColor(),
                             modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
@@ -584,7 +585,7 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
                 singleLine = true, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth())
             if (valid) {
                 Spacer(Modifier.height(16.dp))
-                Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+                Surface(shape = RoundedCornerShape(22.dp), color = wardPanelColor(),
                     modifier = Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Avatar(name.ifBlank { JidUtil.nick(jid) }, 46)

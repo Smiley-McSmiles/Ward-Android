@@ -60,7 +60,7 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
         Column(Modifier.fillMaxSize().padding(pad).statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
+                if (onBack != null) WardBackButton(onBack)
                 Text("Settings", style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(start = if (onBack == null) 16.dp else 0.dp))
             }
@@ -291,7 +291,7 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
         topBar = {
             TopAppBar(
                 title = { Text(title) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                navigationIcon = { WardBackButton(onBack) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     scrolledContainerColor = MaterialTheme.colorScheme.background)
@@ -682,7 +682,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
         snackbarHost = { WardSnackbarHost(snackbar) },
         topBar = {
             TopAppBar(title = { Text(acc.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                navigationIcon = { WardBackButton(onBack) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     scrolledContainerColor = MaterialTheme.colorScheme.background))
@@ -882,7 +882,7 @@ private fun StoragePage(vm: AppViewModel, onBack: () -> Unit) {
     Scaffold(containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { WardSnackbarHost(snackbar) },
         topBar = { TopAppBar(title = { Text("Storage") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
+            navigationIcon = { WardBackButton(onBack) },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.background,
                 scrolledContainerColor = MaterialTheme.colorScheme.background)) }) { pad ->
@@ -939,7 +939,7 @@ fun DonatePage(onBack: () -> Unit) {
     }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(title = { Text("Donate") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
+            WardBackButton(onBack)
         }, colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.background,
             scrolledContainerColor = MaterialTheme.colorScheme.background))
@@ -994,7 +994,7 @@ fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
     val context = LocalContext.current
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(title = { Text("About Ward") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
+            WardBackButton(onBack)
         }, colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.background,
             scrolledContainerColor = MaterialTheme.colorScheme.background))

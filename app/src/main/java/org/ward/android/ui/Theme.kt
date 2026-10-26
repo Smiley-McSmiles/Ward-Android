@@ -58,9 +58,9 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
     val onAccent = if (accent.luminance() > 0.52f) Color(0xFF15161A) else Color.White
 
     val colors = if (dark) {
-        val background = Color(0xFF101115)
-        val surface = Color(0xFF15161B)
-        val surfaceVariant = Color(0xFF2D2F36)
+        val background = Color(0xFF121016)
+        val surface = Color(0xFF18161E)
+        val surfaceVariant = Color(0xFF3A3646)
         darkColorScheme(
             primary = accent,
             onPrimary = onAccent,
@@ -76,28 +76,28 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
             tertiaryContainer = tint(Color(0xFF8ED8CF), surface, 0.22f),
             onTertiaryContainer = Color(0xFFD8F6F1),
             background = background,
-            onBackground = Color(0xFFE7E4EC),
+            onBackground = Color(0xFFEDE8F5),
             surface = surface,
-            onSurface = Color(0xFFE7E4EC),
+            onSurface = Color(0xFFEDE8F5),
             surfaceVariant = surfaceVariant,
-            onSurfaceVariant = Color(0xFFC5C4CE),
+            onSurfaceVariant = Color(0xFFCBC5D9),
             surfaceTint = accent,
-            inverseSurface = Color(0xFFE7E4EC),
-            inverseOnSurface = Color(0xFF2E3036),
+            inverseSurface = Color(0xFFEDE8F5),
+            inverseOnSurface = Color(0xFF2C2936),
             error = Color(0xFFFFB4AB),
             onError = Color(0xFF690005),
             errorContainer = Color(0xFF93000A),
             onErrorContainer = Color(0xFFFFDAD6),
-            outline = Color(0xFF8F909A),
-            outlineVariant = Color(0xFF44464F),
+            outline = Color(0xFF968FA6),
+            outlineVariant = Color(0xFF4B4659),
             scrim = Color.Black,
-            surfaceBright = Color(0xFF33343B),
-            surfaceDim = Color(0xFF101115),
-            surfaceContainerLowest = Color(0xFF0B0C0F),
-            surfaceContainerLow = Color(0xFF1A1B21),
-            surfaceContainer = Color(0xFF1E1F25),
-            surfaceContainerHigh = Color(0xFF25262D),
-            surfaceContainerHighest = Color(0xFF2D2E36)
+            surfaceBright = Color(0xFF3A3646),
+            surfaceDim = Color(0xFF121016),
+            surfaceContainerLowest = Color(0xFF0D0B11),
+            surfaceContainerLow = Color(0xFF1E1B25),
+            surfaceContainer = Color(0xFF24212C),
+            surfaceContainerHigh = Color(0xFF2C2936),
+            surfaceContainerHighest = Color(0xFF373342)
         )
     } else {
         val background = Color(0xFFF6F6FA)

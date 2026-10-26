@@ -1,12 +1,12 @@
 package org.ward.android.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -29,6 +30,34 @@ import org.ward.android.util.TimeUtil
 
 /** Set by [WardTheme] so the avatar-shape preference applies everywhere. */
 val LocalAvatarShapeRounded = compositionLocalOf { false }
+
+/** The elevated purple-grey panel used throughout the app in dark mode. */
+@Composable
+fun wardPanelColor(): Color = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+    MaterialTheme.colorScheme.surfaceContainerHigh
+} else {
+    MaterialTheme.colorScheme.surfaceContainerLow
+}
+
+/** Dark mode uses a background-coloured gap between rows, matching Android settings panels. */
+@Composable
+fun wardDividerColor(): Color = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+    MaterialTheme.colorScheme.background
+} else {
+    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+}
+
+@Composable
+fun WardBackButton(onClick: () -> Unit) {
+    FilledIconButton(
+        onClick = onClick,
+        shape = CircleShape,
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = wardPanelColor(),
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
+    ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+}
 
 @Composable
 fun Avatar(text: String, size: Int = 44, color: String = "", modifier: Modifier = Modifier, show: String? = null,
@@ -92,9 +121,8 @@ fun SettingsGroup(
         }
         Surface(
             shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            tonalElevation = 0.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.50f))
+            color = wardPanelColor(),
+            tonalElevation = 0.dp
         ) {
             Column(Modifier.fillMaxWidth(), content = content)
         }
@@ -102,10 +130,11 @@ fun SettingsGroup(
 }
 
 @Composable
-fun SettingsDivider(startIndent: Int = 16) {
+fun SettingsDivider(startIndent: Int = 0) {
     HorizontalDivider(
         modifier = Modifier.padding(start = startIndent.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+        thickness = 1.dp,
+        color = wardDividerColor()
     )
 }
 
@@ -138,7 +167,7 @@ fun ChatRow(
     val context = LocalContext.current
     val twelveHour = TimeUtil.twelveHour(context, LocalTimeFormat.current)
     Surface(onClick = onClick, shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+        color = wardPanelColor(), tonalElevation = 0.dp,
         modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (compact) 1.dp else 3.dp)) {
         ListItem(
             modifier = Modifier,
@@ -179,16 +208,19 @@ fun ChatRow(
 
 @Composable
 fun ContactRow(contact: ContactEntity, onClick: () -> Unit) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
-        leadingContent = { Avatar(contact.name, 40, photo = contact.avatar, show = contact.presence) },
-        headlineContent = { Text(contact.name, fontWeight = FontWeight.Medium) },
-        supportingContent = {
-            Text(if (contact.presence == "offline") contact.jid else contact.status.ifBlank {
-                when (contact.presence) { "available", "chat" -> "Available"; "away" -> "Away"; "dnd" -> "Busy"; "xa" -> "Away for a while"; else -> "Offline" }
-            }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    )
+    Surface(onClick = onClick, shape = RoundedCornerShape(20.dp), color = wardPanelColor(),
+        tonalElevation = 0.dp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)) {
+        ListItem(
+            leadingContent = { Avatar(contact.name, 40, photo = contact.avatar, show = contact.presence) },
+            headlineContent = { Text(contact.name, fontWeight = FontWeight.Medium) },
+            supportingContent = {
+                Text(if (contact.presence == "offline") contact.jid else contact.status.ifBlank {
+                    when (contact.presence) { "available", "chat" -> "Available"; "away" -> "Away"; "dnd" -> "Busy"; "xa" -> "Away for a while"; else -> "Offline" }
+                }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        )
+    }
 }
 
 @Composable
@@ -206,7 +238,7 @@ fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Str
 @Composable
 fun SectionCard(content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+        colors = CardDefaults.cardColors(containerColor = wardPanelColor())) {
         Column(content = content)
     }
 }

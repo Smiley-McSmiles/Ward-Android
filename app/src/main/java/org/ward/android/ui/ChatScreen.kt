@@ -189,7 +189,7 @@ fun ChatScreen(vm: AppViewModel) {
             // under the status bar. A Column keeps them stacked and lets Scaffold measure both.
             Column(Modifier.fillMaxWidth()) {
             TopAppBar(
-                navigationIcon = { IconButton(onClick = { vm.selectChat(null) }) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                navigationIcon = { WardBackButton { vm.selectChat(null) } },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { details = true }) {
                         Avatar(c.displayName, 34, photo = if (c.isGroup) c.avatar else contact?.avatar ?: c.avatar,
