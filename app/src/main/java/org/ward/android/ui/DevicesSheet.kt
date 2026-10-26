@@ -136,7 +136,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
             SettingsGroup {
                 if (devices.isEmpty()) {
                     ListItem(
-                        headlineContent = { Text("No published devices") },
+                        headlineContent = { Text("No published devices", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("This address has not published an OMEMO device list yet.") },
                         leadingContent = { Icon(Icons.Filled.Devices, null) }
                     )
@@ -153,13 +153,13 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                     "Passphrase-protected files compatible with Ward for GTK. Android-to-Android restores also keep sessions.")
                 SettingsGroup {
                     ListItem(
-                        headlineContent = { Text("Export this device…") },
+                        headlineContent = { Text("Export this device…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("OMEMO identity, pre-keys and sessions") },
                         leadingContent = { Icon(Icons.Filled.Download, null) },
                         modifier = Modifier.clickable { dialogKind = "export-device"; passphrase = "" })
                     SettingsDivider()
                     ListItem(
-                        headlineContent = { Text("Import a device…") },
+                        headlineContent = { Text("Import a device…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Restore a device backup; use one copy at a time") },
                         leadingContent = { Icon(Icons.Filled.Upload, null) },
                         modifier = Modifier.clickable {
@@ -169,13 +169,13 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                         })
                     SettingsDivider()
                     ListItem(
-                        headlineContent = { Text("Export trust decisions…") },
+                        headlineContent = { Text("Export trust decisions…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Verified and distrusted keys for all accounts") },
                         leadingContent = { Icon(Icons.Filled.Download, null) },
                         modifier = Modifier.clickable { dialogKind = "export-trust"; passphrase = "" })
                     SettingsDivider()
                     ListItem(
-                        headlineContent = { Text("Import trust decisions…") },
+                        headlineContent = { Text("Import trust decisions…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Restore verification choices") },
                         leadingContent = { Icon(Icons.Filled.Upload, null) },
                         modifier = Modifier.clickable {
@@ -189,7 +189,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                     "Cleanup reads the published device lists from the server before removing anything.")
                 SettingsGroup {
                     ListItem(
-                        headlineContent = { Text("Clean up old keys and devices…") },
+                        headlineContent = { Text("Clean up old keys and devices…", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Remove orphaned bundles and local keys, then republish this device") },
                         leadingContent = { Icon(Icons.Filled.DeleteSweep, null) },
                         modifier = Modifier.clickable(enabled = !busy) { cleanConfirm = true })
@@ -319,7 +319,7 @@ private fun DeviceRow(vm: AppViewModel, accountId: Long, jid: String, d: DeviceE
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(if (d.thisDevice) "This device" else "Device ${d.deviceId}",
-                style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             val trustColor = when (d.trust) {
                 "verified", "trusted" -> MaterialTheme.colorScheme.primaryContainer
                 "distrusted" -> MaterialTheme.colorScheme.errorContainer

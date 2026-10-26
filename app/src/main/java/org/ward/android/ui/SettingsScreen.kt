@@ -20,9 +20,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,14 +63,24 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
             Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 if (onBack != null) WardBackButton(onBack)
-                Text("Settings", style = MaterialTheme.typography.headlineSmall,
+                Text("Settings", style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = if (onBack == null) 16.dp else 0.dp))
             }
-            OutlinedTextField(search, { search = it }, placeholder = { Text("Search settings") },
+            OutlinedTextField(search, { search = it },
+                placeholder = { Text("Search settings",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal)) },
                 leadingIcon = { Icon(Icons.Filled.Search, null) },
                 trailingIcon = if (search.isBlank()) null else ({
                     IconButton(onClick = { search = "" }) { Icon(Icons.Filled.Close, "Clear search") }
                 }),
+                textStyle = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                ),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
                 singleLine = true, shape = MaterialTheme.shapes.extraLarge)
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 4.dp, bottom = 36.dp)) {
@@ -89,11 +101,11 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
                                 results.forEachIndexed { index, spec ->
                                     if (index > 0) SettingsDivider()
                                     ListItem(
-                                        headlineContent = { Text(spec.title) },
+                                        headlineContent = { Text(spec.title, style = MaterialTheme.typography.titleMedium) },
                                         supportingContent = {
                                             Text(SettingsSchema.pages.firstOrNull { it.first == spec.page }?.second ?: spec.page)
                                         },
-                                        leadingContent = { Icon(pageIcon(spec.page), null) },
+                                        leadingContent = { SettingsIconTile(pageIcon(spec.page), pageIconColor(spec.page)) },
                                         trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                                         modifier = Modifier.clickable {
                                             search = ""
@@ -104,20 +116,20 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
                         }
                     }
                 } else {
-                    item { SettingsSectionLabel("Accounts") }
                     item {
                         SettingsGroup {
                             if (accounts.isEmpty()) {
-                                ListItem(headlineContent = { Text("No accounts yet") },
+                                ListItem(headlineContent = { Text("No accounts yet", style = MaterialTheme.typography.titleMedium) },
                                     supportingContent = { Text("Add an XMPP account to start messaging.") },
-                                    leadingContent = { Icon(Icons.Filled.PersonAdd, null) },
+                                    leadingContent = { SettingsIconTile(Icons.Filled.PersonAdd, WardIconColors.green) },
                                     modifier = Modifier.clickable { onAddAccount() })
                             } else {
                                 accounts.forEachIndexed { index, acc ->
                                     if (index > 0) SettingsDivider()
                                     val conn = states[acc.id]
                                     ListItem(
-                                        headlineContent = { Text(acc.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                        headlineContent = { Text(acc.displayName, style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                         supportingContent = {
                                             Text(acc.jid + " · " + connectionLabel(conn), maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis)
@@ -134,54 +146,64 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
                                                     Spacer(Modifier.width(5.dp))
                                                     Text("Online", style = MaterialTheme.typography.labelLarge,
                                                         color = MaterialTheme.colorScheme.primary)
+                                                    Icon(Icons.Filled.ChevronRight, null)
                                                 }
                                             } else {
-                                                FilledTonalButton(onClick = {
-                                                    scope.launch {
-                                                        vm.connect(acc)
-                                                        snackbar.showSnackbar("Connecting ${acc.displayName}…")
-                                                    }
-                                                }) { Text("Connect") }
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    FilledTonalButton(onClick = {
+                                                        scope.launch {
+                                                            vm.connect(acc)
+                                                            snackbar.showSnackbar("Connecting ${acc.displayName}…")
+                                                        }
+                                                    }) { Text("Connect") }
+                                                    Icon(Icons.Filled.ChevronRight, null)
+                                                }
                                             }
                                         },
                                         modifier = Modifier.clickable { page = "account:${acc.id}" })
                                 }
                                 SettingsDivider()
-                                ListItem(headlineContent = { Text("Add account") },
-                                    leadingContent = { Icon(Icons.Filled.PersonAdd, null) },
+                                ListItem(headlineContent = { Text("Add account", style = MaterialTheme.typography.titleMedium) },
+                                    leadingContent = { SettingsIconTile(Icons.Filled.PersonAdd, WardIconColors.green) },
                                     trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                                     modifier = Modifier.clickable { onAddAccount() })
                             }
                         }
                     }
 
-                    item { SettingsSectionLabel("Preferences") }
-                    item {
-                        SettingsGroup {
-                            val pages = SettingsSchema.pages
-                            pages.forEachIndexed { index, (key, title) ->
-                                if (index > 0) SettingsDivider()
-                                ListItem(headlineContent = { Text(title) },
-                                    supportingContent = pageSubtitle(key)?.let { subtitle -> { Text(subtitle) } },
-                                    leadingContent = { Icon(pageIcon(key), null) },
-                                    trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                                    modifier = Modifier.clickable { page = key })
+                    val preferenceGroups = listOf(
+                        listOf("general", "appearance"),
+                        listOf("chats", "calls", "attachments"),
+                        listOf("notifications", "encryption", "privacy", "security"),
+                        listOf("storage", "advanced")
+                    )
+                    for (group in preferenceGroups) {
+                        item {
+                            SettingsGroup {
+                                group.forEachIndexed { index, key ->
+                                    val title = SettingsSchema.pages.firstOrNull { it.first == key }?.second ?: key
+                                    if (index > 0) SettingsDivider()
+                                    ListItem(
+                                        headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+                                        supportingContent = pageSubtitle(key)?.let { subtitle -> { Text(subtitle) } },
+                                        leadingContent = { SettingsIconTile(pageIcon(key), pageIconColor(key)) },
+                                        trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                                        modifier = Modifier.clickable { page = key })
+                                }
                             }
                         }
                     }
-
-                    item { SettingsSectionLabel("More") }
                     item {
                         SettingsGroup {
-                            ListItem(headlineContent = { Text("About Ward") },
+                            ListItem(headlineContent = { Text("About Ward", style = MaterialTheme.typography.titleMedium) },
                                 supportingContent = { Text("Version, licences and project links") },
-                                leadingContent = { Icon(Icons.Filled.Info, null) },
+                                leadingContent = { SettingsIconTile(Icons.Filled.Info, WardIconColors.blue) },
                                 trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                                 modifier = Modifier.clickable { page = "about" })
                             SettingsDivider()
-                            ListItem(headlineContent = { Text("Donate") },
+                            ListItem(headlineContent = { Text("Donate", style = MaterialTheme.typography.titleMedium) },
                                 supportingContent = { Text("Support Ward’s development") },
-                                leadingContent = { Icon(Icons.Filled.Favorite, null) },
+                                leadingContent = { SettingsIconTile(Icons.Filled.Favorite, WardIconColors.pink) },
                                 trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                                 modifier = Modifier.clickable { page = "donate" })
                         }
@@ -242,14 +264,33 @@ fun pageIcon(key: String) = when (key) {
     else -> Icons.Filled.Settings
 }
 
+fun pageIconColor(key: String): Color = when (key) {
+    "general" -> WardIconColors.blue
+    "appearance" -> WardIconColors.orange
+    "chats" -> WardIconColors.green
+    "calls" -> WardIconColors.cyan
+    "attachments" -> WardIconColors.yellow
+    "notifications" -> WardIconColors.pink
+    "encryption" -> WardIconColors.purple
+    "privacy" -> WardIconColors.teal
+    "security" -> WardIconColors.green
+    "accounts" -> WardIconColors.blue
+    "storage" -> WardIconColors.yellow
+    "advanced" -> WardIconColors.grey
+    "about" -> WardIconColors.blue
+    "donate" -> WardIconColors.pink
+    else -> WardIconColors.blue
+}
+
 @Composable
 private fun ActionRow(icon: ImageVector, title: String, subtitle: String? = null,
                       trailing: String? = null, enabled: Boolean = true,
-                      showChevron: Boolean = true, onClick: () -> Unit) {
+                      showChevron: Boolean = true,
+                      iconColor: Color = WardIconColors.blue, onClick: () -> Unit) {
     ListItem(
-        headlineContent = { Text(title) },
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
         supportingContent = if (subtitle == null) null else ({ Text(subtitle) }),
-        leadingContent = { Icon(icon, null) },
+        leadingContent = { SettingsIconTile(icon, iconColor) },
         trailingContent = if (trailing != null || showChevron) ({
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (trailing != null) Text(trailing, style = MaterialTheme.typography.labelLarge)
@@ -290,7 +331,7 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
         snackbarHost = { WardSnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(title) },
+                title = { Text(title, style = MaterialTheme.typography.headlineSmall) },
                 navigationIcon = { WardBackButton(onBack) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -316,7 +357,8 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                     item {
                         SettingsGroup {
                             ActionRow(Icons.Filled.PhoneInTalk, "Call diagnostics",
-                                "Connection timeout, relay candidates and ICE errors are written to the XML console.")
+                                "Connection timeout, relay candidates and ICE errors are written to the XML console.",
+                                iconColor = WardIconColors.cyan)
                             { onNavigate("xml") }
                         }
                     }
@@ -327,9 +369,11 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                     item { SettingsSectionLabel("Info") }
                     item {
                         SettingsGroup {
-                            ActionRow(Icons.Filled.Info, "About Ward", "Version, licences and project links") { onNavigate("about") }
+                            ActionRow(Icons.Filled.Info, "About Ward", "Version, licences and project links",
+                                iconColor = WardIconColors.blue) { onNavigate("about") }
                             SettingsDivider()
-                            ActionRow(Icons.Filled.Favorite, "Donate", "Support Ward’s development") { onNavigate("donate") }
+                            ActionRow(Icons.Filled.Favorite, "Donate", "Support Ward’s development",
+                                iconColor = WardIconColors.pink) { onNavigate("donate") }
                         }
                     }
                 }
@@ -338,7 +382,8 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                     item {
                         SettingsGroup {
                             ActionRow(Icons.Filled.Devices, "Your devices",
-                                "Fingerprints, verification and backups for each account") {
+                                "Fingerprints, verification and backups for each account",
+                                iconColor = WardIconColors.teal) {
                                 val id = accounts.firstOrNull()?.id
                                 if (id == null) onAddAccount()
                                 else if (accounts.size == 1) onNavigate("account:$id")
@@ -347,7 +392,7 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                             SettingsDivider()
                             ActionRow(Icons.Filled.Build, if (repairing) "Repairing OMEMO 2…" else "Repair OMEMO 2",
                                 "Rebuild this device’s OMEMO 2 keys and publish a fresh bundle",
-                                enabled = !repairing) {
+                                iconColor = WardIconColors.orange, enabled = !repairing) {
                                 repairing = true
                                 vm.repairOmemo2 { result ->
                                     repairing = false
@@ -358,7 +403,7 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                             SettingsDivider()
                             ActionRow(Icons.Filled.DeleteSweep, if (cleaning) "Cleaning up…" else "Clean up old keys and devices",
                                 "Fetch the server’s device list, republish this device and remove stale local keys",
-                                enabled = !cleaning) {
+                                iconColor = WardIconColors.red, enabled = !cleaning) {
                                 cleaning = true
                                 vm.cleanUpKeys { result ->
                                     cleaning = false
@@ -383,18 +428,20 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                     item { SettingsSectionLabel("Diagnostics") }
                     item {
                         SettingsGroup {
-                            ActionRow(Icons.Filled.Code, "XML console", "Watch, search and send raw XMPP stanzas") { onNavigate("xml") }
+                            ActionRow(Icons.Filled.Code, "XML console", "Watch, search and send raw XMPP stanzas",
+                                iconColor = WardIconColors.blue) { onNavigate("xml") }
                             SettingsDivider()
-                            ActionRow(Icons.Filled.Dns, "Service discovery", "Browse the features a server publishes") { onNavigate("disco") }
+                            ActionRow(Icons.Filled.Dns, "Service discovery", "Browse the features a server publishes",
+                                iconColor = WardIconColors.teal) { onNavigate("disco") }
                         }
                     }
                 }
                 "accounts" -> {
-                    item { SettingsSectionLabel("Accounts") }
                     item {
                         SettingsGroup {
                             if (accounts.isEmpty()) {
-                                ActionRow(Icons.Filled.PersonAdd, "Add account", "Sign in to an XMPP server") { onAddAccount() }
+                                ActionRow(Icons.Filled.PersonAdd, "Add account", "Sign in to an XMPP server",
+                                    iconColor = WardIconColors.green) { onAddAccount() }
                             } else {
                                 accounts.forEachIndexed { index, acc ->
                                     if (index > 0) SettingsDivider()
@@ -407,7 +454,8 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                                     }
                                 }
                                 SettingsDivider()
-                                ActionRow(Icons.Filled.PersonAdd, "Add account", "Sign in to another XMPP server") { onAddAccount() }
+                                ActionRow(Icons.Filled.PersonAdd, "Add account", "Sign in to another XMPP server",
+                                    iconColor = WardIconColors.green) { onAddAccount() }
                             }
                         }
                     }
@@ -447,13 +495,11 @@ fun PageIntro(key: String) {
         else -> Triple(Icons.Filled.Settings, "Preferences", "")
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
-        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
-            Icon(icon, null, Modifier.padding(10.dp).size(24.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
-        }
+        SettingsIconTile(icon, pageIconColor(key), 44)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodySmall,
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp))
         }
     }
@@ -467,7 +513,8 @@ private fun BatteryGroup() {
     ActionRow(Icons.Filled.BatterySaver, "Battery optimisation",
         if (ignoring) "Ward is exempt; Android will not stop it in the background."
         else "Android may pause Ward in the background. Allow it to run without restrictions.",
-        trailing = if (ignoring) "Exempt" else "Optimised", showChevron = false) {
+        trailing = if (ignoring) "Exempt" else "Optimised", showChevron = false,
+        iconColor = WardIconColors.green) {
         val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
         runCatching { context.startActivity(intent) }.onFailure {
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -480,7 +527,7 @@ private fun BatteryGroup() {
 fun SettingRow(vm: AppViewModel, spec: SettingSpec, value: String) {
     when (spec.type) {
         SettingType.BOOL -> ListItem(
-            headlineContent = { Text(spec.title) },
+            headlineContent = { Text(spec.title, style = MaterialTheme.typography.titleMedium) },
             supportingContent = if (spec.subtitle.isBlank()) null else ({ Text(spec.subtitle) }),
             trailingContent = {
                 Switch(checked = value.toBoolean(), onCheckedChange = { vm.settings.set(spec.key, it) })
@@ -489,7 +536,7 @@ fun SettingRow(vm: AppViewModel, spec: SettingSpec, value: String) {
             var open by remember { mutableStateOf(false) }
             val label = spec.choices.firstOrNull { it.value.toString() == value }?.label ?: value
             ListItem(
-                headlineContent = { Text(spec.title) },
+                headlineContent = { Text(spec.title, style = MaterialTheme.typography.titleMedium) },
                 supportingContent = if (spec.subtitle.isBlank()) null else ({ Text(spec.subtitle) }),
                 trailingContent = {
                     Box {
@@ -511,7 +558,7 @@ fun SettingRow(vm: AppViewModel, spec: SettingSpec, value: String) {
         SettingType.INT -> {
             if ((spec.max ?: 100) - (spec.min ?: 0) > 1000) {
                 var dialog by remember { mutableStateOf(false) }
-                ListItem(headlineContent = { Text(spec.title) },
+                ListItem(headlineContent = { Text(spec.title, style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text(if (spec.subtitle.isBlank()) "$value${spec.unit}" else "${spec.subtitle} · $value${spec.unit}") },
                     trailingContent = { Icon(Icons.Filled.Edit, null) },
                     modifier = Modifier.clickable { dialog = true })
@@ -521,7 +568,7 @@ fun SettingRow(vm: AppViewModel, spec: SettingSpec, value: String) {
             } else {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(spec.title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                        Text(spec.title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                         Surface(shape = MaterialTheme.shapes.small,
                             color = MaterialTheme.colorScheme.secondaryContainer) {
                             Text("$value${spec.unit}", modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
@@ -542,7 +589,7 @@ fun SettingRow(vm: AppViewModel, spec: SettingSpec, value: String) {
         SettingType.TEXT, SettingType.LIST, SettingType.TIME_RANGE -> {
             var dialog by remember { mutableStateOf(false) }
             ListItem(
-                headlineContent = { Text(spec.title) },
+                headlineContent = { Text(spec.title, style = MaterialTheme.typography.titleMedium) },
                 supportingContent = {
                     Text(if (value.isBlank()) (spec.subtitle.ifBlank { "Default" }) else value.take(90),
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -681,7 +728,8 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { WardSnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(title = { Text(acc.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            TopAppBar(title = { Text(acc.displayName, style = MaterialTheme.typography.headlineSmall,
+                maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { WardBackButton(onBack) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -705,7 +753,8 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
             item {
                 SettingsGroup {
                     ListItem(
-                        headlineContent = { Text(if (state?.state == "online") "Connected" else "Not connected") },
+                        headlineContent = { Text(if (state?.state == "online") "Connected" else "Not connected",
+                            style = MaterialTheme.typography.titleMedium) },
                         supportingContent = {
                             Text(state?.error?.takeIf { it.isNotBlank() } ?: if (state?.state == "online")
                                 "Messages and calls are arriving on this device." else "Ward reconnects automatically when it can.")
@@ -738,7 +787,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
             item {
                 SettingsGroup {
                     ListItem(
-                        headlineContent = { Text("Profile photo") },
+                        headlineContent = { Text("Profile photo", style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("Published with your XMPP profile so contacts see it") },
                         leadingContent = { Avatar(acc.displayName, 40, acc.color, photo = acc.avatar) },
                         trailingContent = {
@@ -835,7 +884,8 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
             item { SettingsSectionLabel("Remove") }
             item {
                 SettingsGroup {
-                    ListItem(headlineContent = { Text("Remove account from Ward…", color = MaterialTheme.colorScheme.error) },
+                    ListItem(headlineContent = { Text("Remove account from Ward…",
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium) },
                         supportingContent = { Text("The account stays on the server; local history and keys are deleted.") },
                         leadingContent = { Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.error) },
                         modifier = Modifier.clickable { confirmRemove = true })
@@ -881,7 +931,7 @@ private fun StoragePage(vm: AppViewModel, onBack: () -> Unit) {
     BackHandler { onBack() }
     Scaffold(containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { WardSnackbarHost(snackbar) },
-        topBar = { TopAppBar(title = { Text("Storage") },
+        topBar = { TopAppBar(title = { Text("Storage", style = MaterialTheme.typography.headlineSmall) },
             navigationIcon = { WardBackButton(onBack) },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.background,
@@ -890,14 +940,14 @@ private fun StoragePage(vm: AppViewModel, onBack: () -> Unit) {
             PageIntro("storage")
             SettingsSectionLabel("Cache")
             SettingsGroup {
-                ListItem(headlineContent = { Text("Downloaded media and thumbnails") },
+                ListItem(headlineContent = { Text("Downloaded media and thumbnails", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text(if (refreshing) "Calculating…" else "$fileCount files · ${sizeLabel(cacheBytes)}") },
-                    leadingContent = { Icon(Icons.Filled.Folder, null) },
+                    leadingContent = { SettingsIconTile(Icons.Filled.Folder, WardIconColors.yellow) },
                     trailingContent = if (refreshing) ({ CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) }) else null)
                 SettingsDivider()
-                ListItem(headlineContent = { Text("Clear cached files") },
+                ListItem(headlineContent = { Text("Clear cached files", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text("Downloads and thumbnails will be fetched again when you open a chat.") },
-                    leadingContent = { Icon(Icons.Filled.CleaningServices, null) },
+                    leadingContent = { SettingsIconTile(Icons.Filled.CleaningServices, WardIconColors.pink) },
                     modifier = Modifier.clickable(enabled = cacheBytes > 0 || !refreshing) {
                         scope.launch {
                             val freed = withContext(Dispatchers.IO) {
@@ -912,17 +962,17 @@ private fun StoragePage(vm: AppViewModel, onBack: () -> Unit) {
             }
             SettingsSectionLabel("Diagnostics")
             SettingsGroup {
-                ListItem(headlineContent = { Text("Clear the XML console") },
+                ListItem(headlineContent = { Text("Clear the XML console", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text("Diagnostic stanzas kept in memory for this session") },
-                    leadingContent = { Icon(Icons.Filled.Code, null) },
+                    leadingContent = { SettingsIconTile(Icons.Filled.Code, WardIconColors.cyan) },
                     modifier = Modifier.clickable {
                         vm.core.clearXml()
                         scope.launch { snackbar.showSnackbar("XML console cleared") }
                     })
                 SettingsDivider()
-                ListItem(headlineContent = { Text("Refresh size") },
+                ListItem(headlineContent = { Text("Refresh size", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text("Recalculate the cache after downloading files") },
-                    leadingContent = { Icon(Icons.Filled.Refresh, null) },
+                    leadingContent = { SettingsIconTile(Icons.Filled.Refresh, WardIconColors.grey) },
                     modifier = Modifier.clickable { refreshKey++ })
             }
         }
@@ -938,7 +988,7 @@ fun DonatePage(onBack: () -> Unit) {
         android.widget.Toast.makeText(context, "$label copied", android.widget.Toast.LENGTH_SHORT).show()
     }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
-        TopAppBar(title = { Text("Donate") }, navigationIcon = {
+        TopAppBar(title = { Text("Donate", style = MaterialTheme.typography.headlineSmall) }, navigationIcon = {
             WardBackButton(onBack)
         }, colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.background,
@@ -959,13 +1009,13 @@ fun DonatePage(onBack: () -> Unit) {
             }
             SettingsSectionLabel("Crypto")
             SettingsGroup {
-                DonationRow(Icons.Filled.CurrencyBitcoin, "Bitcoin (BTC)", "bc1qy2gtdhnfxp9dcs6v9jda748npmsjx3jgwp99mx") { copy("Bitcoin address", it) }
+                DonationRow(Icons.Filled.CurrencyBitcoin, "Bitcoin (BTC)", "bc1qy2gtdhnfxp9dcs6v9jda748npmsjx3jgwp99mx", WardIconColors.orange) { copy("Bitcoin address", it) }
                 SettingsDivider()
-                DonationRow(Icons.Filled.CurrencyExchange, "Monero (XMR)", "82xtMVSmesuLjPtgHfBCEhM5Fpqh1SLLNf9pzHRRNPqQZsvrnmoM1ZGC7AiLyPfsufdyrMWHrWYV2hsC8jc5rEBVLMHWTLy") { copy("Monero address", it) }
+                DonationRow(Icons.Filled.CurrencyExchange, "Monero (XMR)", "82xtMVSmesuLjPtgHfBCEhM5Fpqh1SLLNf9pzHRRNPqQZsvrnmoM1ZGC7AiLyPfsufdyrMWHrWYV2hsC8jc5rEBVLMHWTLy", WardIconColors.orange) { copy("Monero address", it) }
             }
             SettingsSectionLabel("Other")
             SettingsGroup {
-                DonationRow(Icons.Filled.Payments, "Cash App", "\$SmileyMcSmiles") { copy("Cash App tag", it) }
+                DonationRow(Icons.Filled.Payments, "Cash App", "\$SmileyMcSmiles", WardIconColors.green) { copy("Cash App tag", it) }
             }
             Text("Tap an address to copy it to the clipboard.", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 28.dp, vertical = 16.dp))
@@ -974,12 +1024,13 @@ fun DonatePage(onBack: () -> Unit) {
 }
 
 @Composable
-private fun DonationRow(icon: ImageVector, label: String, value: String, onCopy: (String) -> Unit) {
+private fun DonationRow(icon: ImageVector, label: String, value: String, iconColor: Color,
+                        onCopy: (String) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+        SettingsIconTile(icon, iconColor)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(label, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(3.dp))
             Text(value, fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -993,7 +1044,7 @@ private fun DonationRow(icon: ImageVector, label: String, value: String, onCopy:
 fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
     val context = LocalContext.current
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
-        TopAppBar(title = { Text("About Ward") }, navigationIcon = {
+        TopAppBar(title = { Text("About Ward", style = MaterialTheme.typography.headlineSmall) }, navigationIcon = {
             WardBackButton(onBack)
         }, colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.background,
@@ -1011,15 +1062,18 @@ fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
                 style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 28.dp))
             Spacer(Modifier.height(22.dp))
             SettingsGroup {
-                ActionRow(Icons.Filled.Public, "Project website", "sonder.guru") {
+                ActionRow(Icons.Filled.Public, "Project website", "sonder.guru",
+                    iconColor = WardIconColors.blue) {
                     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://sonder.guru"))) }
                 }
                 SettingsDivider()
-                ActionRow(Icons.Filled.Code, "Source code", "github.com/Smiley-McSmiles/Ward-Android") {
+                ActionRow(Icons.Filled.Code, "Source code", "github.com/Smiley-McSmiles/Ward-Android",
+                    iconColor = WardIconColors.grey) {
                     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Smiley-McSmiles/Ward-Android"))) }
                 }
                 SettingsDivider()
-                ActionRow(Icons.Filled.Favorite, "Donate", "Support Ward’s development") { onDonate() }
+                ActionRow(Icons.Filled.Favorite, "Donate", "Support Ward’s development",
+                    iconColor = WardIconColors.pink) { onDonate() }
             }
             Spacer(Modifier.height(18.dp))
             Text("MIT licensed. OMEMO uses the Signal protocol. Adapted from Ward for GTK by Smiley McSmiles.",

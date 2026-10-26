@@ -164,7 +164,7 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
 
     BackHandler { onBack() }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
-        TopAppBar(title = { Text("Security") }, navigationIcon = {
+        TopAppBar(title = { Text("Security", style = MaterialTheme.typography.headlineSmall) }, navigationIcon = {
             WardBackButton(onBack)
         }, colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.background,
@@ -184,7 +184,10 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                             else -> "Off — anyone who opens Ward can read local messages"
                         })
                     },
-                    leadingContent = { Icon(if (currentType == AppLockStore.OFF) Icons.Filled.LockOpen else Icons.Filled.Lock, null) })
+                    leadingContent = {
+                        SettingsIconTile(if (currentType == AppLockStore.OFF) Icons.Filled.LockOpen else Icons.Filled.Lock,
+                            WardIconColors.green)
+                    })
                 SettingsDivider()
                 Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Text("Method", style = MaterialTheme.typography.bodyLarge)

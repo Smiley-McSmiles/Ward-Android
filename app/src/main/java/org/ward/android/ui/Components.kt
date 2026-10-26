@@ -34,9 +34,30 @@ val LocalAvatarShapeRounded = compositionLocalOf { false }
 /** The elevated purple-grey panel used throughout the app in dark mode. */
 @Composable
 fun wardPanelColor(): Color = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
-    MaterialTheme.colorScheme.surfaceContainerHigh
+    MaterialTheme.colorScheme.surfaceContainer
 } else {
     MaterialTheme.colorScheme.surfaceContainerLow
+}
+
+/** Android Settings-style pastel icon tiles. */
+object WardIconColors {
+    val blue = Color(0xFFA8C7FA)
+    val cyan = Color(0xFF9DDDEB)
+    val green = Color(0xFFA6E6A0)
+    val yellow = Color(0xFFF2D06B)
+    val orange = Color(0xFFF4BE86)
+    val pink = Color(0xFFF2A7C3)
+    val purple = Color(0xFFC9B6F5)
+    val red = Color(0xFFF2A6A0)
+    val teal = Color(0xFF9DE0D2)
+    val grey = Color(0xFFCAC4D0)
+}
+
+@Composable
+fun SettingsIconTile(icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, size: Int = 40) {
+    Box(Modifier.size(size.dp).clip(CircleShape).background(color), contentAlignment = Alignment.Center) {
+        Icon(icon, null, Modifier.size((size * 0.54f).dp), tint = Color(0xFF1C1B1F))
+    }
 }
 
 /** Dark mode uses a background-coloured gap between rows, matching Android settings panels. */
@@ -110,7 +131,7 @@ fun SettingsGroup(
     supporting: String? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp)) {
         if (title != null) {
             Column(Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 8.dp)) {
                 Text(title, style = MaterialTheme.typography.titleSmall,

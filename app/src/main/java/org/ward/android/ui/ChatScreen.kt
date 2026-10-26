@@ -402,7 +402,7 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
     LaunchedEffect(m.id) { if (animateIn) enter.animateTo(1f, androidx.compose.animation.core.tween(220)) }
     val bubble = layout == "bubbles"
     val name = if (chat.isGroup) m.senderName else if (outgoing) "You" else (contact?.name ?: m.senderName)
-    val color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else wardPanelColor()
     Row(modifier.fillMaxWidth()
             .graphicsLayer { alpha = enter.value; translationY = (1f - enter.value) * 45f }
             .padding(horizontal = 10.dp, vertical = if (grouping || compact) 1.dp else 5.dp),
