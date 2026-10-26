@@ -386,6 +386,7 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                    contact: ContactEntity?, modifier: Modifier = Modifier,
                    onLongPress: () -> Unit, onReply: () -> Unit, onReact: (String) -> Unit) {
     val outgoing = m.direction == 1
+    val context = LocalContext.current
     val grouping = prev != null && prev.direction == m.direction && prev.senderJid == m.senderJid &&
         prev.attachmentsJson == "[]" && m.timestamp - prev.timestamp < 5 * 60_000 && prev.retracted == 0
     val reactions = parseReactions(m.reactionsJson)
@@ -487,9 +488,8 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                                 Modifier.size(11.dp), tint = if (m.trust == "verified") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Spacer(Modifier.width(4.dp))
-                        val timeFormat = vm.settings.string("appearance.time_format", "system")
-                        Text(TimeUtil.clock(m.timestamp, vm.settings.bool("appearance.time_seconds"),
-                            when (timeFormat) { "12" -> true; "24" -> false; else -> null }), fontSize = 10.sp,
+                        Text(TimeUtil.clock(m.timestamp, LocalTimeSeconds.current,
+                            TimeUtil.twelveHour(context, LocalTimeFormat.current)), fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (outgoing) {
                             Spacer(Modifier.width(4.dp))
@@ -590,7 +590,7 @@ private fun MessageDetailsDialog(chat: ChatEntity, msg: MessageEntity, onDismiss
         else -> "None"
     }
     val time = TimeUtil.day(msg.timestamp) + " " + TimeUtil.clock(msg.timestamp, true,
-        false)
+        TimeUtil.twelveHour(context, LocalTimeFormat.current))
     fun copy(value: String) {
         if (value.isBlank()) return
         context.copyText(value)

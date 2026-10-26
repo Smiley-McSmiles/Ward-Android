@@ -54,6 +54,13 @@ object Colors {
 }
 
 object TimeUtil {
+    /** Resolve the "system", 12-hour or 24-hour preference into a concrete clock style. */
+    fun twelveHour(context: Context, setting: String): Boolean = when (setting) {
+        "12" -> true
+        "24" -> false
+        else -> !android.text.format.DateFormat.is24HourFormat(context)
+    }
+
     fun clock(ts: Long, seconds: Boolean = false, twelveHour: Boolean? = null): String {
         val is12 = twelveHour ?: false
         val fmt = if (is12) (if (seconds) "h:mm:ss a" else "h:mm a") else (if (seconds) "HH:mm:ss" else "HH:mm")
@@ -80,11 +87,11 @@ object TimeUtil {
             else -> SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(ts))
         }
     }
-    fun listStamp(ts: Long): String {
+    fun listStamp(ts: Long, seconds: Boolean = false, twelveHour: Boolean? = null): String {
         val now = System.currentTimeMillis()
         return when {
             now - ts < 86_400_000 && SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(ts)) ==
-                SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(now)) -> clock(ts)
+                SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(now)) -> clock(ts, seconds, twelveHour)
             now - ts < 7 * 86_400_000L -> SimpleDateFormat("EEE", Locale.getDefault()).format(Date(ts))
             else -> SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(ts))
         }

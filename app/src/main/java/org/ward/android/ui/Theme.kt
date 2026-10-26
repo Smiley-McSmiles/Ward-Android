@@ -13,6 +13,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,6 +30,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import org.ward.android.data.SettingsStore
+
+/** Time formatting is shared by the chat list, message bubbles and message details. */
+val LocalTimeFormat = compositionLocalOf { "system" }
+val LocalTimeSeconds = compositionLocalOf { false }
 
 private val accents = mapOf(
     "blue" to Color(0xFF3584E4), "teal" to Color(0xFF2190A4), "green" to Color(0xFF3A944A),
@@ -173,7 +178,9 @@ fun WardTheme(settings: SettingsStore, content: @Composable () -> Unit) {
     val textScale = (settingsState["appearance.text_scale"]?.toFloatOrNull() ?: 100f).coerceIn(80f, 200f) / 100f
     CompositionLocalProvider(
         LocalDensity provides Density(baseDensity.density, baseDensity.fontScale * textScale),
-        LocalAvatarShapeRounded provides (settingsState["appearance.avatar_shape"] == "rounded")
+        LocalAvatarShapeRounded provides (settingsState["appearance.avatar_shape"] == "rounded"),
+        LocalTimeFormat provides (settingsState["appearance.time_format"] ?: "system"),
+        LocalTimeSeconds provides (settingsState["appearance.time_seconds"] == "true")
     ) {
         MaterialTheme(colorScheme = colors, typography = typography, shapes = shapes) {
             // Screens draw on a raw background rather than a Surface. Without this, unstyled Text

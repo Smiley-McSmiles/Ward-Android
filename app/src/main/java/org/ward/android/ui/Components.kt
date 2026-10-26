@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -134,6 +135,8 @@ fun ChatRow(
     showTimestamp: Boolean = true,
     photo: String = chat.avatar
 ) {
+    val context = LocalContext.current
+    val twelveHour = TimeUtil.twelveHour(context, LocalTimeFormat.current)
     Surface(onClick = onClick, shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
         modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (compact) 1.dp else 3.dp)) {
@@ -145,8 +148,9 @@ fun ChatRow(
                     Text(chat.displayName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f), fontSize = 16.sp)
                     if (chat.pinned) Icon(Icons.Filled.PushPin, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (showTimestamp) Text(TimeUtil.listStamp(chat.lastActivity), fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
+                    if (showTimestamp) Text(TimeUtil.listStamp(chat.lastActivity, LocalTimeSeconds.current, twelveHour),
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp))
                 }
             },
             supportingContent = if (showPreview) ({
