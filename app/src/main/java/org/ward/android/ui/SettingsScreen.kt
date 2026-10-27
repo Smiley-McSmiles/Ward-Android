@@ -210,7 +210,7 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
                     }
                     item {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 20.dp)) {
-                            Text("Ward 1.0.3 for Android", style = MaterialTheme.typography.bodySmall,
+                            Text("Ward 1.0.4 for Android", style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("XMPP · OMEMO · Markdown", style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1056,7 +1056,7 @@ fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
             Avatar("Ward", 96, "#3584e4")
             Spacer(Modifier.height(16.dp))
             Text("Ward", style = MaterialTheme.typography.headlineMedium)
-            Text("1.0.3 for Android", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("1.0.4 for Android", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
             Text("Private messaging on the open XMPP network, encrypted by default with OMEMO. Markdown messages, groups, calls, files, and a native server administration console for Prosody and ejabberd.",
                 style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 28.dp))
