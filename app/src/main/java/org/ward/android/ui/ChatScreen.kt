@@ -793,7 +793,10 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
             } else false
         }
     } else Modifier
-    Surface(tonalElevation = 3.dp, modifier = Modifier.navigationBarsPadding()) {
+    // The composer sits directly over the chat background; only the input pill and the open
+    // recorder card should be visible, not a full-width panel behind them.
+    Surface(color = Color.Transparent, tonalElevation = 0.dp,
+        modifier = Modifier.navigationBarsPadding()) {
         Column {
             AnimatedVisibility(visible = replyTo != null || editing != null,
                 enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
