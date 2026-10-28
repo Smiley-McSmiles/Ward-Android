@@ -1,9 +1,11 @@
 package org.ward.android.ui
 
 import android.content.Intent
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +16,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,6 +34,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -41,7 +45,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.Key
@@ -57,6 +64,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -78,6 +87,7 @@ import org.ward.android.util.AppLockStore
 import org.ward.android.util.Colors
 import org.ward.android.util.TimeUtil
 import org.ward.android.xmpp.OccupantInfo
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -123,33 +133,161 @@ fun ChatScreen(vm: AppViewModel) {
         AppLockStore.endExternalActivity()
         if (uris.isNotEmpty()) vm.sendFiles(uris)
     }
-    var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
-    var voiceFile by remember { mutableStateOf<java.io.File?>(null) }
+    var recorder by remember(c.id) { mutableStateOf<MediaRecorder?>(null) }
+    var voiceStartedAt by remember(c.id) { mutableLongStateOf(0L) }
+    // Keep the rapidly changing waveform in a State object and read it only inside the composer,
+    // so a 12 fps recording preview does not recompose the whole message list.
+    val voiceState = remember(c.id) { mutableStateOf(VoiceUiState()) }
+    fun currentVoice() = voiceState.value
+    var composerEmoji by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    fun releaseVoiceResources() {
+        recorder?.let { r ->
+            runCatching { r.stop() }
+            runCatching { r.release() }
+        }
+        recorder = null
+    }
+
     fun startVoice() {
+        if (recorder != null) return
+        currentVoice().file?.delete()
+        val f = File(context.cacheDir, "voice-${System.currentTimeMillis()}.m4a")
+        var r: MediaRecorder? = null
         try {
-            val f = java.io.File(context.cacheDir, "voice-${System.currentTimeMillis()}.m4a")
-            val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
-            r.setAudioSource(MediaRecorder.AudioSource.MIC)
+            r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
+            // VOICE_COMMUNICATION asks the platform for its voice-processing path, which normally
+            // includes noise suppression and automatic gain control while recording a voice note.
+            r.setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
             r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             r.setAudioEncodingBitRate(96000)
             r.setAudioSamplingRate(44100)
+            r.setAudioChannels(1)
             r.setOutputFile(f.absolutePath)
-            r.prepare(); r.start()
-            voiceFile = f; recorder = r
-        } catch (e: Exception) { recorder = null }
+            r.prepare()
+            r.start()
+            recorder = r
+            voiceStartedAt = SystemClock.elapsedRealtime()
+            voiceState.value = VoiceUiState(open = true, phase = VoicePhase.Recording, file = f,
+                noiseCancellation = true)
+        } catch (e: Exception) {
+            runCatching { r?.release() }
+            f.delete()
+            voiceState.value = VoiceUiState(open = true,
+                error = "Could not start recording: ${e.message ?: "microphone unavailable"}")
+        }
     }
+
     fun stopVoice() {
         val r = recorder ?: return
         recorder = null
-        try { r.stop() } catch (_: Exception) { }
-        try { r.release() } catch (_: Exception) { }
-        voiceFile?.let { f -> if (f.length() > 1000) vm.sendFile(Uri.fromFile(f)) }
-        voiceFile = null
+        val elapsed = (SystemClock.elapsedRealtime() - voiceStartedAt).coerceAtLeast(0L)
+        var failed = false
+        runCatching { r.stop() }.onFailure { failed = true }
+        runCatching { r.release() }
+        val v = currentVoice()
+        val f = v.file
+        if (failed || f == null || f.length() <= 1000L) {
+            f?.delete()
+            voiceState.value = v.copy(phase = VoicePhase.Idle, file = null, elapsedMs = 0L,
+                waveform = emptyList(), noiseCancellation = null,
+                error = "That recording was too short. Tap the microphone and try again.")
+        } else {
+            voiceState.value = v.copy(phase = VoicePhase.Review, elapsedMs = elapsed,
+                noiseCancellation = null, error = "")
+        }
     }
+
+    fun restartVoice() {
+        currentVoice().file?.delete()
+        releaseVoiceResources()
+        voiceState.value = currentVoice().copy(phase = VoicePhase.Idle, file = null,
+            elapsedMs = 0L, waveform = emptyList(), noiseCancellation = null, error = "")
+        startVoice()
+    }
+
+    fun cancelVoice() {
+        releaseVoiceResources()
+        currentVoice().file?.delete()
+        voiceState.value = VoiceUiState()
+    }
+
+    fun attachVoice() {
+        val f = currentVoice().file ?: return
+        if (f.length() <= 1000L) {
+            voiceState.value = currentVoice().copy(error = "That recording is too short to send.")
+            return
+        }
+        // The outbox copies the file before uploading, but keep the cache file around until the
+        // upload has read it. The document cache is cleaned up by the system later.
+        vm.sendFile(Uri.fromFile(f))
+        voiceState.value = VoiceUiState()
+    }
+
+    fun toggleVoice() {
+        val v = currentVoice()
+        when {
+            !v.open -> {
+                keyboard?.hide()
+                focusManager.clearFocus()
+                voiceState.value = VoiceUiState(open = true)
+            }
+            v.phase == VoicePhase.Recording -> stopVoice()
+            else -> cancelVoice()
+        }
+    }
+
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startVoice()
+        else voiceState.value = currentVoice().copy(open = true,
+            error = "Microphone permission is required to record voice messages.")
     }
+
+    fun handleVoiceAction(action: VoiceAction) {
+        when (action) {
+            VoiceAction.Start -> if (androidx.core.content.ContextCompat.checkSelfPermission(context,
+                    android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                startVoice()
+            } else {
+                micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            }
+            VoiceAction.Stop -> stopVoice()
+            VoiceAction.Restart -> restartVoice()
+            VoiceAction.Cancel -> cancelVoice()
+            VoiceAction.Attach -> attachVoice()
+        }
+    }
+
+    DisposableEffect(c.id) {
+        onDispose {
+            recorder?.let { r -> runCatching { r.stop() }; runCatching { r.release() } }
+            recorder = null
+            currentVoice().file?.delete()
+        }
+    }
+
+    // Key only on the recorder, not on the rapidly changing VoiceUiState, so updating the
+    // waveform does not invalidate this whole screen's composition scope.
+    LaunchedEffect(recorder) {
+        val activeRecorder = recorder ?: return@LaunchedEffect
+        if (voiceState.value.phase != VoicePhase.Recording) return@LaunchedEffect
+        val startedAt = voiceStartedAt
+        while (true) {
+            if (voiceState.value.phase != VoicePhase.Recording) break
+            val amplitude = runCatching { activeRecorder.maxAmplitude }.getOrDefault(0)
+            val level = (amplitude / 32767f).coerceIn(0f, 1f)
+            val v = voiceState.value
+            voiceState.value = v.copy(
+                elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+                waveform = (v.waveform + level).takeLast(48)
+            )
+            delay(80)
+        }
+    }
+
     var pendingVideoCall by remember { mutableStateOf(false) }
     val callPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         vm.core.session(c.accountId)?.call?.start(c, pendingVideoCall)
@@ -275,18 +413,29 @@ fun ChatScreen(vm: AppViewModel) {
                 replyTo = replyTo, editing = editing,
                 onCancelReply = { replyTo = null; editing = null; text = c.draft },
                 onSend = {
+                    if (currentVoice().open) cancelVoice()
                     if (editing != null) { vm.edit(editing!!, text); editing = null }
                     else vm.send(text, replyTo)
                     replyTo = null; text = ""
                 },
-                onAttach = { AppLockStore.beginExternalActivity(); attach.launch(arrayOf("*/*")) },
-                recording = recorder != null,
+                onAttach = {
+                    if (currentVoice().open) cancelVoice()
+                    AppLockStore.beginExternalActivity()
+                    attach.launch(arrayOf("*/*"))
+                },
+                onAttachImages = {
+                    if (currentVoice().open) cancelVoice()
+                    AppLockStore.beginExternalActivity()
+                    attach.launch(arrayOf("image/*"))
+                },
+                onEmoji = {
+                    if (currentVoice().open) cancelVoice()
+                    composerEmoji = true
+                },
                 sendWithEnter = (appSettings["chats.send_with"] ?: "enter") == "enter",
-                onVoice = {
-                    if (recorder != null) stopVoice()
-                    else if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) startVoice()
-                    else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
-                })
+                voiceState = voiceState,
+                onVoiceClick = { toggleVoice() },
+                onVoiceAction = { handleVoiceAction(it) })
         }
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
@@ -414,6 +563,12 @@ fun ChatScreen(vm: AppViewModel) {
         onDevices = { details = false; devices = true })
     if (members) MembersSheet(vm, c, onDismiss = { members = false })
     if (devices) DevicesSheet(vm, c.accountId, c.jid, own = false, onDismiss = { devices = false })
+    if (composerEmoji) {
+        EmojiPickerDialog(vm, title = "Insert emoji", onDismiss = { composerEmoji = false }) { emoji ->
+            text += emoji
+            composerEmoji = false
+        }
+    }
     if (passwordOpen) {
         var pw by remember { mutableStateOf("") }
         AlertDialog(onDismissRequest = { passwordOpen = false }, title = { Text("Password") },
@@ -608,12 +763,28 @@ private fun formatSize(size: Long): String = when {
     else -> "$size B"
 }
 
+enum class VoicePhase { Idle, Recording, Review }
+enum class VoiceAction { Start, Stop, Restart, Cancel, Attach }
+
+data class VoiceUiState(
+    val open: Boolean = false,
+    val phase: VoicePhase = VoicePhase.Idle,
+    val elapsedMs: Long = 0L,
+    val waveform: List<Float> = emptyList(),
+    val noiseCancellation: Boolean? = null,
+    val file: File? = null,
+    val error: String = ""
+)
+
 @Composable
 fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: MessageEntity?, editing: MessageEntity?,
              onCancelReply: () -> Unit, onSend: () -> Unit, onAttach: () -> Unit,
-             recording: Boolean = false,
+             onAttachImages: () -> Unit = {}, onEmoji: () -> Unit = {},
              sendWithEnter: Boolean = true,
-             onVoice: () -> Unit = {}) {
+             voiceState: State<VoiceUiState>,
+             onVoiceClick: () -> Unit = {},
+             onVoiceAction: (VoiceAction) -> Unit = {}) {
+    val voice by voiceState
     val enterModifier = if (sendWithEnter) {
         Modifier.onPreviewKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && !event.isShiftPressed) {
@@ -638,30 +809,283 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                     IconButton(onClick = onCancelReply) { Icon(Icons.Filled.Close, "Cancel") }
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onAttach) { Icon(Icons.Filled.AttachFile, "Attach") }
-                Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        OutlinedTextField(text, onText, placeholder = {
-                            Text(if (chat.encryption == "off") "Message" else "Encrypted message")
-                        }, modifier = Modifier.weight(1f).padding(0.dp).then(enterModifier), maxLines = 6,
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(30.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.weight(1f)) {
+                    Row(Modifier.padding(start = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onAttach, enabled = !voice.open) {
+                            Icon(Icons.Filled.AddCircleOutline, "Attach files",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        BasicTextField(
+                            value = text,
+                            onValueChange = onText,
+                            modifier = Modifier.weight(1f).padding(vertical = 14.dp)
+                                .onFocusChanged { if (it.isFocused && voice.open) onVoiceAction(VoiceAction.Cancel) }
+                                .then(enterModifier),
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            maxLines = 6,
                             keyboardOptions = KeyboardOptions(imeAction = if (sendWithEnter) ImeAction.Send else ImeAction.Default),
                             keyboardActions = if (sendWithEnter) KeyboardActions(onSend = { if (text.isNotBlank()) onSend() }) else KeyboardActions(),
-                            colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Color.Transparent,
-                                focusedBorderColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent))
+                            decorationBox = { inner ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (text.isEmpty()) {
+                                        Text(if (chat.encryption == "off") "Message" else "Encrypted message",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    inner()
+                                }
+                            })
+                        IconButton(onClick = onEmoji, enabled = !voice.open) {
+                            Icon(Icons.Outlined.EmojiEmotions, "Insert emoji",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (text.isBlank()) {
+                            IconButton(onClick = onAttachImages, enabled = !voice.open) {
+                                Icon(Icons.Outlined.Image, "Send image",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else {
+                            FilledIconButton(onClick = onSend, enabled = !voice.open,
+                                modifier = Modifier.size(38.dp), shape = CircleShape) {
+                                Icon(Icons.Filled.Send, "Send", Modifier.size(18.dp))
+                            }
+                        }
                     }
                 }
-                IconButton(onClick = onVoice) {
-                    Icon(if (recording) Icons.Filled.Stop else Icons.Filled.Mic, if (recording) "Stop recording" else "Voice message",
-                        tint = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Spacer(Modifier.width(2.dp))
-                FilledIconButton(onClick = onSend, enabled = text.isNotBlank() && !recording, modifier = Modifier.size(48.dp), shape = CircleShape) {
-                    Icon(Icons.Filled.Send, "Send")
+                Spacer(Modifier.width(8.dp))
+                FilledIconButton(onClick = onVoiceClick, modifier = Modifier.size(52.dp), shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = if (voice.open) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = if (voice.open) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onPrimaryContainer)) {
+                    Icon(Icons.Filled.GraphicEq,
+                        if (voice.open) "Close voice recorder" else "Record a voice message")
                 }
             }
+            AnimatedVisibility(visible = voice.open,
+                enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                VoiceRecorderPanel(voice, onVoiceAction)
+            }
         }
+    }
+}
+
+private fun formatVoiceTime(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    return "%02d:%02d".format(total / 60, total % 60)
+}
+
+@Composable
+private fun VoiceRecorderPanel(voice: VoiceUiState, onAction: (VoiceAction) -> Unit) {
+    Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(30.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.padding(16.dp)) {
+            when (voice.phase) {
+                VoicePhase.Idle -> IdleVoiceCard()
+                VoicePhase.Recording -> RecordingVoiceCard(voice)
+                VoicePhase.Review -> ReviewVoiceCard(voice)
+            }
+            if (voice.error.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(voice.error, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.height(14.dp))
+            VoiceControls(voice, onAction)
+        }
+    }
+}
+
+@Composable
+private fun IdleVoiceCard() {
+    Column(Modifier.fillMaxWidth().height(210.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(84.dp)) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Mic, null, Modifier.size(38.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("Tap to record your voice", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text("Listen before you send.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun RecordingVoiceCard(voice: VoiceUiState) {
+    Column(Modifier.fillMaxWidth().height(210.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(9.dp).background(MaterialTheme.colorScheme.error, CircleShape))
+            Spacer(Modifier.width(9.dp))
+            Text(formatVoiceTime(voice.elapsedMs), fontSize = 30.sp,
+                fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+        }
+        Spacer(Modifier.height(14.dp))
+        VoiceWaveform(voice.waveform, active = true,
+            modifier = Modifier.fillMaxWidth().height(62.dp).padding(horizontal = 6.dp))
+        Spacer(Modifier.height(12.dp))
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.GraphicEq, null, Modifier.size(17.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Text(if (voice.noiseCancellation == true) "Noise cancellation ON" else "Noise cancellation unavailable",
+                    style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewVoiceCard(voice: VoiceUiState) {
+    val file = voice.file
+    var player by remember(file) { mutableStateOf<MediaPlayer?>(null) }
+    var playing by remember(file) { mutableStateOf(false) }
+    DisposableEffect(file) {
+        onDispose { player?.release(); player = null }
+    }
+    fun togglePlayback() {
+        val f = file ?: return
+        if (playing) {
+            player?.pause()
+            playing = false
+            return
+        }
+        val p = player ?: runCatching {
+            MediaPlayer().apply {
+                setDataSource(f.absolutePath)
+                prepare()
+                setOnCompletionListener { playing = false; it.seekTo(0) }
+            }
+        }.getOrNull() ?: return
+        player = p
+        p.start()
+        playing = true
+    }
+    Row(Modifier.fillMaxWidth().height(210.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        FilledIconButton(onClick = ::togglePlayback, enabled = file != null,
+            modifier = Modifier.size(58.dp), shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer)) {
+            Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                if (playing) "Pause recording" else "Play recording")
+        }
+        Spacer(Modifier.width(12.dp))
+        VoiceWaveform(voice.waveform, active = false,
+            modifier = Modifier.weight(1f).height(62.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(formatVoiceTime(voice.elapsedMs), fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+    }
+}
+
+@Composable
+private fun VoiceWaveform(samples: List<Float>, active: Boolean, modifier: Modifier) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    val bars = 44
+    val data = remember(samples, active) {
+        val tail = samples.takeLast(bars)
+        if (tail.size >= bars) tail else List(bars - tail.size) { 0f } + tail
+    }
+    Canvas(modifier) {
+        val step = size.width / bars
+        val base = 1.5.dp.toPx()
+        // Keep the dots from overlapping when the waveform is wide.
+        val max = minOf(size.height * 0.34f, step * 0.40f)
+        val centerY = size.height / 2f
+        data.forEachIndexed { i, raw ->
+            val level = raw.coerceIn(0f, 1f)
+            drawCircle(color.copy(alpha = if (active) 0.9f else 0.6f),
+                base + max * level, Offset(step * (i + 0.5f), centerY))
+        }
+    }
+}
+
+@Composable
+private fun VoiceControls(voice: VoiceUiState, onAction: (VoiceAction) -> Unit) {
+    val idle = voice.phase == VoicePhase.Idle
+    val recording = voice.phase == VoicePhase.Recording
+    val review = voice.phase == VoicePhase.Review
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        VoiceTextButton(
+            label = if (idle) "Cancel" else "Restart",
+            icon = if (idle) Icons.Filled.Close else Icons.Filled.Replay,
+            onClick = { onAction(if (idle) VoiceAction.Cancel else VoiceAction.Restart) },
+            modifier = Modifier.weight(1f)
+        )
+        VoiceRoundButton(
+            icon = if (idle) Icons.Filled.Mic else Icons.Filled.Stop,
+            onClick = {
+                if (idle) onAction(VoiceAction.Start)
+                else if (recording) onAction(VoiceAction.Stop)
+            },
+            modifier = Modifier.weight(1.15f),
+            container = when {
+                idle -> MaterialTheme.colorScheme.primaryContainer
+                recording -> MaterialTheme.colorScheme.errorContainer
+                else -> MaterialTheme.colorScheme.surfaceContainerHighest
+            },
+            content = when {
+                idle -> MaterialTheme.colorScheme.onPrimaryContainer
+                recording -> MaterialTheme.colorScheme.onErrorContainer
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            enabled = idle || recording
+        )
+        VoiceTextButton(
+            label = "Attach",
+            icon = Icons.Filled.Check,
+            onClick = { onAction(VoiceAction.Attach) },
+            modifier = Modifier.weight(1f),
+            enabled = review,
+            filled = review
+        )
+    }
+}
+
+@Composable
+private fun VoiceTextButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+                            onClick: () -> Unit, modifier: Modifier = Modifier,
+                            enabled: Boolean = true, filled: Boolean = false) {
+    val contentPadding = PaddingValues(horizontal = 10.dp)
+    val shape = RoundedCornerShape(28.dp)
+    if (filled) {
+        Button(onClick = onClick, enabled = enabled, modifier = modifier.height(54.dp),
+            shape = shape, contentPadding = contentPadding) {
+            Icon(icon, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(label, maxLines = 1)
+        }
+    } else {
+        OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier.height(54.dp),
+            shape = shape, contentPadding = contentPadding) {
+            Icon(icon, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(label, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun VoiceRoundButton(icon: androidx.compose.ui.graphics.vector.ImageVector,
+                             onClick: () -> Unit, modifier: Modifier = Modifier,
+                             container: Color, content: Color, enabled: Boolean = true) {
+    Button(onClick = onClick, enabled = enabled, modifier = modifier.height(54.dp),
+        shape = RoundedCornerShape(28.dp), contentPadding = PaddingValues(0.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content)) {
+        Icon(icon, null, Modifier.size(24.dp))
     }
 }
 
@@ -764,7 +1188,8 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
 }
 
 @Composable
-private fun EmojiPickerDialog(vm: AppViewModel, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+private fun EmojiPickerDialog(vm: AppViewModel, title: String = "Choose a reaction",
+                              onDismiss: () -> Unit, onPick: (String) -> Unit) {
     var tone by remember { mutableStateOf(vm.settings.string("chats.reaction_skin_tone", "")) }
     var toneMenu by remember { mutableStateOf(false) }
     val tones = listOf(
@@ -779,7 +1204,7 @@ private fun EmojiPickerDialog(vm: AppViewModel, onDismiss: () -> Unit, onPick: (
             tonalElevation = 6.dp) {
             Column(Modifier.padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Choose a reaction", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     Text("Skin tone", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(6.dp))
