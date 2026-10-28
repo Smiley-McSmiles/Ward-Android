@@ -59,6 +59,20 @@ class CoreTests {
         assertTrue(shouldAutoDownload(false, true, 0L, oneMiB, false))
     }
 
+    @Test fun onlyFinishedAttachmentDownloadsCountAsCached() {
+        val url = "aesgcm://upload.example/f.enc#00ff"
+        val finished = FileCrypto.cacheName(url, "clip.mp4")
+        // A second viewer may know the same URL under a different display name.
+        val otherName = FileCrypto.cacheName(url, "clip")
+        assertTrue(FileCrypto.isCompleteCacheFile(finished, url, 20L * 1024 * 1024))
+        assertTrue(FileCrypto.isCompleteCacheFile(otherName, url, 20L * 1024 * 1024))
+        // In-progress transfers must never be reused, or a 20 MB file looks downloaded halfway.
+        assertFalse(FileCrypto.isCompleteCacheFile("$finished.download", url, 10L * 1024 * 1024))
+        assertFalse(FileCrypto.isCompleteCacheFile("$finished.part", url, 10L * 1024 * 1024))
+        assertFalse(FileCrypto.isCompleteCacheFile(finished, url, 0L))
+        assertFalse(FileCrypto.isCompleteCacheFile(finished, "https://other.example/x", 1L))
+    }
+
     @Test fun settingsHaveOneHomeAndNoDeadControls() {
         val keys = SettingsSchema.specs.map { it.key }
         assertEquals(keys.size, keys.toSet().size)
