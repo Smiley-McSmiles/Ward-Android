@@ -186,7 +186,10 @@ class WardCore private constructor(val context: Context) {
         val all = allSessions()
         if (all.isEmpty()) return "No connected accounts. Connect an account and try again."
         val lines = mutableListOf<String>()
-        for (session in all) lines += session.cleanUpDevices()
+        for (session in all) {
+            lines += session.cleanUpDevices()
+            runCatching { session.loadDevices(session.account.jid) }
+        }
         return lines.joinToString("\n")
     }
 

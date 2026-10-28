@@ -2050,10 +2050,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     runBlocking(Dispatchers.IO) {
                         val old = core.dao.devicesOnce(account.id, jid)
                             .firstOrNull { it.deviceId == dev.toLong() && it.protocol == "omemo2" }
+                        val thisDevice = jid == account.jid && dev == o2.deviceId
                         core.dao.insertDevice(DeviceEntity(account.id, jid, dev.toLong(), fp,
-                            label = old?.label?.takeIf { it.isNotBlank() } ?: if (jid == account.jid) "This device (OMEMO 2)" else "",
+                            label = old?.label?.takeIf { it.isNotBlank() } ?: if (thisDevice) "This device (OMEMO 2)" else "",
                             trust = old?.trust ?: if (core.settings.string("encryption.trust", "btbv") == "btbv") "trusted" else "undecided",
-                            own = jid == account.jid, thisDevice = false, protocol = "omemo2"))
+                            own = jid == account.jid, thisDevice = thisDevice, protocol = "omemo2"))
                     }
                 }
             }
@@ -2123,19 +2124,44 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 lines += "OMEMO 2: not initialised, skipped."
             } else {
                 val result = o2.cleanUpOwnDevices()
-                var removedLocal = 0
-                for (d in core.dao.devicesOnce(account.id, account.jid)) {
-                    if (d.protocol == "omemo2" && d.deviceId.toInt() !in result.listed && d.deviceId.toInt() != o2.deviceId) {
-                        core.dao.deleteDevice(account.id, account.jid, d.deviceId, d.protocol)
-                        removedLocal++
+                if (result.error.isNotBlank()) {
+                    lines += "OMEMO 2: ${result.error}."
+                } else {
+                    var removedLocal = 0
+                    for (d in core.dao.devicesOnce(account.id, account.jid)) {
+                        if (d.protocol == "omemo2" && d.deviceId.toInt() !in result.listed && d.deviceId.toInt() != o2.deviceId) {
+                            core.dao.deleteDevice(account.id, account.jid, d.deviceId, d.protocol)
+                            removedLocal++
+                        }
                     }
+                    val kept = result.listed.count { it != o2.deviceId }
+                    val publishNote = if (result.published) "republished" else "could not republish yet; see the XML console"
+                    val keptNote = if (kept > 0) " $kept published device(s) were kept; use Remove on a device to take it off the list." else ""
+                    lines += "OMEMO 2: ${result.listed.size} device(s) $publishNote; removed ${result.removedBundles} stale bundle(s) and $removedLocal local record(s).$keptNote"
                 }
-                val publishNote = if (result.published) "republished" else "could not republish yet; see the XML console"
-                lines += "OMEMO 2: ${result.listed.size} device(s) $publishNote; removed ${result.removedBundles} stale bundle(s) and $removedLocal local record(s)."
             }
         }.onFailure { lines += "OMEMO 2: ${it.message ?: "cleanup failed"}" }
 
         if (lines.isEmpty()) "Nothing to clean up." else lines.joinToString("\n")
+    }
+
+    /**
+     * Remove one of our own other OMEMO 2 devices from the published list and delete its bundle
+     * and local key material. Legacy OMEMO has no per-device API in Smack, so for legacy this
+     * purges the published list down to this device (all other legacy devices are removed).
+     */
+    suspend fun removeOwnDevice(deviceId: Long, protocol: String): String = withContext(Dispatchers.IO) {
+        if (protocol == "omemo2") {
+            val ok = omemo2?.removeOwnDevice(deviceId.toInt()) ?: false
+            if (!ok) return@withContext "Could not remove device $deviceId (not connected or the device list could not be published)."
+        } else {
+            val mgr = omemo ?: return@withContext "Legacy OMEMO is not connected."
+            runCatching { mgr.purgeDeviceList() }
+                .onFailure { return@withContext "Could not clean up legacy devices: ${it.message ?: "publish failed"}" }
+        }
+        core.dao.deleteDevice(account.id, account.jid, deviceId, protocol)
+        loadDevices(account.jid)
+        "Removed device $deviceId."
     }
 
     fun refreshOmemoDevices(jid: String) {

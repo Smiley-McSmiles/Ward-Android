@@ -60,7 +60,9 @@ abstract class WardDatabase : RoomDatabase() {
         fun get(context: Context): WardDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, WardDatabase::class.java, "ward.db")
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-                .fallbackToDestructiveMigration()
+                // Never fall back to a destructive migration: wiping the database changes account
+                // ids and device rows, and can make the app look like it lost its OMEMO identity
+                // on an update. Any schema change must ship an explicit migration instead.
                 .build().also { instance = it }
         }
     }
