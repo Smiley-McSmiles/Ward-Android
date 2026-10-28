@@ -73,4 +73,13 @@ object FileCrypto {
 
     fun cacheName(url: String, name: String): String =
         MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) } + "-" + name.replace('/', '_')
+
+    /**
+     * Whether a file in the attachment cache is a finished download for [url]. In-progress
+     * transfers keep their data in ".download" (network) and ".part" (decrypt) files, which must
+     * never be handed to a viewer as if they were complete.
+     */
+    fun isCompleteCacheFile(fileName: String, url: String, length: Long): Boolean =
+        length > 0 && fileName.startsWith(cacheName(url, "")) &&
+            !fileName.endsWith(".download") && !fileName.endsWith(".part")
 }

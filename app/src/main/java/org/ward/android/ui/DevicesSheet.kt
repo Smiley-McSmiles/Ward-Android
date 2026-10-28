@@ -38,6 +38,7 @@ import org.ward.android.xmpp.OmemoBackup
 fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = false, onDismiss: () -> Unit) {
     val devices by vm.core.dao.devices(accountId, jid).collectAsState(initial = emptyList())
     var forget by remember { mutableStateOf<DeviceEntity?>(null) }
+    var remove by remember { mutableStateOf<DeviceEntity?>(null) }
     var account by remember { mutableStateOf<AccountEntity?>(null) }
     var dialogKind by remember { mutableStateOf<String?>(null) }
     var passphrase by remember { mutableStateOf("") }
@@ -143,7 +144,7 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                 } else {
                     devices.forEachIndexed { index, device ->
                         if (index > 0) SettingsDivider()
-                        DeviceRow(vm, accountId, jid, device, onForget = { forget = device })
+                        DeviceRow(vm, accountId, jid, device, onForget = { forget = device }, onRemove = { remove = device })
                     }
                 }
             }
@@ -227,8 +228,9 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
             title = { Text("Clean up old keys and devices?") },
             text = { Text("Ward reads the published device lists from the server first. Legacy OMEMO is republished " +
                 "with only this phone, while OMEMO 2 keeps other phones that are still published and removes " +
-                "orphaned bundles plus local keys for devices that are gone. Old installs will stop receiving " +
-                "new messages; contacts may need to reopen the chat so they fetch the new list.") },
+                "orphaned bundles plus local keys for devices that are gone. To take a published OMEMO 2 " +
+                "device off the list, use Remove on that device. Old installs will stop receiving new " +
+                "messages; contacts may need to reopen the chat so they fetch the new list.") },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
                     cleanConfirm = false
@@ -254,6 +256,23 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
                 vm.forgetDevice(accountId, jid, d.deviceId, d.protocol); forget = null
             }) { Text("Forget") } },
             dismissButton = { TextButton(onClick = { forget = null }) { Text("Cancel") } })
+    }
+    if (remove != null) {
+        val d = remove!!
+        AlertDialog(onDismissRequest = { remove = null }, title = { Text("Remove device ${d.deviceId}?") },
+            text = { Text("It stops getting new messages. If it is still in use, it adds itself again when it goes online.") },
+            confirmButton = { TextButton(enabled = !busy, onClick = {
+                remove = null
+                busy = true
+                message = ""
+                scope.launch {
+                    vm.removeOwnDevice(accountId, d.deviceId, d.protocol) { result ->
+                        busy = false
+                        message = result
+                    }
+                }
+            }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { remove = null }) { Text("Cancel") } })
     }
 
     val kind = dialogKind
@@ -315,7 +334,8 @@ fun DevicesSheet(vm: AppViewModel, accountId: Long, jid: String, own: Boolean = 
 }
 
 @Composable
-private fun DeviceRow(vm: AppViewModel, accountId: Long, jid: String, d: DeviceEntity, onForget: () -> Unit) {
+private fun DeviceRow(vm: AppViewModel, accountId: Long, jid: String, d: DeviceEntity,
+                      onForget: () -> Unit, onRemove: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(if (d.thisDevice) "This device" else "Device ${d.deviceId}",
@@ -351,6 +371,12 @@ private fun DeviceRow(vm: AppViewModel, accountId: Long, jid: String, d: DeviceE
                 vm.trustDevice(accountId, jid, d.deviceId, d.fingerprint, false, d.protocol)
             }) { Text("Distrust") }
             if (!d.own) OutlinedButton(onClick = onForget) { Text("Forget") }
+            if (d.own && !d.thisDevice && d.protocol == "omemo2") {
+                OutlinedButton(onClick = onRemove,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                    Text("Remove")
+                }
+            }
         }
     }
 }

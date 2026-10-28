@@ -186,7 +186,10 @@ class WardCore private constructor(val context: Context) {
         val all = allSessions()
         if (all.isEmpty()) return "No connected accounts. Connect an account and try again."
         val lines = mutableListOf<String>()
-        for (session in all) lines += session.cleanUpDevices()
+        for (session in all) {
+            lines += session.cleanUpDevices()
+            runCatching { session.loadDevices(session.account.jid) }
+        }
         return lines.joinToString("\n")
     }
 
@@ -521,12 +524,10 @@ class WardCore private constructor(val context: Context) {
         return updated
     }
 
-    private fun cachedFileForUrl(cache: File, url: String): File? {
-        val prefix = org.ward.android.util.FileCrypto.cacheName(url, "")
-        return cache.listFiles()?.firstOrNull {
-            it.isFile && it.length() > 0 && it.name.startsWith(prefix) && !it.name.endsWith(".download")
+    private fun cachedFileForUrl(cache: File, url: String): File? =
+        cache.listFiles()?.firstOrNull {
+            it.isFile && org.ward.android.util.FileCrypto.isCompleteCacheFile(it.name, url, it.length())
         }
-    }
 
     suspend fun localFile(url: String, name: String, mime: String): File? {
         val cache = File(context.cacheDir, "files").apply { mkdirs() }
@@ -536,6 +537,8 @@ class WardCore private constructor(val context: Context) {
         // The same attachment can be composed more than once (for example after a carbon copy or
         // when a LazyColumn item is recreated). Join the in-flight download instead of starting a
         // second transfer that writes the same temp file and makes the progress bar flicker.
+        // In-flight first: a file that is still being written must never be handed out.
+        downloadJobs[url]?.takeIf { !it.isCompleted }?.let { return it.await() }
         cachedFileForUrl(cache, url)?.let { return it }
         val job = downloadJobs.compute(url) { _, current ->
             if (current != null && !current.isCompleted) {
@@ -555,21 +558,34 @@ class WardCore private constructor(val context: Context) {
         cachedFileForUrl(cache, url)?.let { return it }
         val out = File(cache, org.ward.android.util.FileCrypto.cacheName(url, name))
         val link = org.ward.android.util.FileCrypto.parse(url)
-        // Remove only leftovers for this URL; a live transfer is protected by downloadJobs.
-        val prefix = org.ward.android.util.FileCrypto.cacheName(url, "")
-        cache.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".download") }
-            ?.forEach { it.delete() }
+        // Keep a partial transfer around so a large file that drops near the end resumes with a
+        // Range request instead of downloading the whole thing again.
+        val raw = File(cache, out.name + ".download")
         downloadProgress.update { it + (url to 0f) }
         return try {
             withContext(Dispatchers.IO) {
                 val source = if (link != null) link.httpsUrl else url
-                val raw = File(cache, out.name + ".download")
-                val connection = URL(source).openConnection()
-                val total = connection.contentLengthLong
-                var copied = 0L
+                var existing = if (raw.isFile) raw.length() else 0L
+                val connection = URL(source).openConnection() as java.net.HttpURLConnection
+                if (existing > 0L) connection.setRequestProperty("Range", "bytes=$existing-")
+                val code = connection.responseCode
+                if (code == 416) {
+                    // The server no longer has the bytes we kept: start over instead of failing
+                    // forever on the same stale partial file.
+                    raw.delete()
+                    connection.disconnect()
+                    throw java.io.IOException("stale partial download for $url")
+                }
+                val resumed = existing > 0L && code == java.net.HttpURLConnection.HTTP_PARTIAL
+                if (!resumed) {
+                    existing = 0L
+                    raw.delete()
+                }
+                val total = if (resumed) existing + connection.contentLengthLong else connection.contentLengthLong
+                var copied = existing
                 var lastUpdate = 0L
                 connection.getInputStream().use { input ->
-                    raw.outputStream().use { output ->
+                    java.io.FileOutputStream(raw, resumed).use { output ->
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
                             val read = input.read(buffer)
@@ -585,22 +601,33 @@ class WardCore private constructor(val context: Context) {
                         }
                     }
                 }
-                (connection as? java.net.HttpURLConnection)?.disconnect()
+                connection.disconnect()
+                // Publish only a complete file: decrypt (or rename) into .part, then move it into
+                // place in one step so no caller can ever see a half-written attachment.
+                val part = File(cache, out.name + ".part")
+                part.delete()
                 if (link != null) {
-                    org.ward.android.util.FileCrypto.decrypt(raw, out, link.key, link.iv)
-                    raw.delete()
-                } else {
-                    out.delete()
-                    if (!raw.renameTo(out)) {
-                        raw.copyTo(out, overwrite = true)
+                    try {
+                        org.ward.android.util.FileCrypto.decrypt(raw, part, link.key, link.iv)
+                    } catch (e: Exception) {
+                        part.delete()
                         raw.delete()
+                        throw e
                     }
+                    raw.delete()
+                } else if (!raw.renameTo(part)) {
+                    raw.copyTo(part, overwrite = true)
+                    raw.delete()
+                }
+                out.delete()
+                if (!part.renameTo(out)) {
+                    part.copyTo(out, overwrite = true)
+                    part.delete()
                 }
                 downloadProgress.update { it + (url to 1f) }
                 out
             }
         } catch (_: Exception) {
-            runCatching { File(cache, out.name + ".download").delete() }
             null
         } finally {
             downloadProgress.update { it - url }

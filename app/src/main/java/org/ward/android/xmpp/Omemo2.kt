@@ -732,7 +732,8 @@ class Omemo2(
         save()
     }
 
-    data class OwnDeviceCleanup(val listed: List<Int>, val removedBundles: Int, val published: Boolean)
+    data class OwnDeviceCleanup(val listed: List<Int>, val removedBundles: Int, val published: Boolean,
+                                val error: String = "")
 
     /**
      * Server-aware OMEMO 2 cleanup. The published device-list item is authoritative: devices that
@@ -740,22 +741,37 @@ class Omemo2(
      * bundles make clients think there is still an active device. Remove the orphaned bundles,
      * drop local sessions/identities for them, and republish this device so it cannot be lost in
      * the process. Devices that are still advertised are left alone: they may be other phones.
+     * An unreadable or empty device list aborts the prune instead of deleting everything.
      */
     fun cleanUpOwnDevices(): OwnDeviceCleanup = synchronized(lock) {
-        if (!conn.isConnected) return@synchronized OwnDeviceCleanup(emptyList(), 0, false)
+        if (!conn.isConnected) return@synchronized OwnDeviceCleanup(emptyList(), 0, false, "not connected")
         val ownJid = org.jxmpp.jid.impl.JidCreate.entityBareFrom(account.jid)
-        val published = runCatching { fetchDevices(account.jid, true) }.getOrDefault(emptyList())
+        val published = try {
+            fetchDevices(account.jid, true, strict = true)
+        } catch (e: Exception) {
+            core.addXmlLog(account.id, false,
+                "OMEMO 2 cleanup aborted: could not read the published device list (${e.message})")
+            return@synchronized OwnDeviceCleanup(emptyList(), 0, false,
+                "could not read the published device list; nothing was removed")
+        }
         val bundleNode = runCatching {
             PubSubManager.getInstanceFor(conn, ownJid).getLeafNode(BUNDLES)
         }.getOrNull()
         val bundleIds = runCatching {
             bundleNode?.getItems<Item>()?.mapNotNull { it.id?.toIntOrNull() }?.distinct() ?: emptyList()
         }.getOrDefault(emptyList())
+        if (published.isEmpty() && bundleIds.any { it != deviceId }) {
+            core.addXmlLog(account.id, false,
+                "OMEMO 2 cleanup aborted: the published device list is empty but ${bundleIds.size} bundle(s) exist")
+            return@synchronized OwnDeviceCleanup(emptyList(), 0, false,
+                "the published device list is empty; old bundles were left alone")
+        }
 
         val orphaned = bundleIds.filter { it !in published && it != deviceId }
         val invalid = published.filter { id ->
             if (id == deviceId) false else {
-                val bundle = fetchBundle(account.jid, id) ?: return@filter false
+                // A published device without a bundle cannot be encrypted to: treat it as stale.
+                val bundle = fetchBundle(account.jid, id) ?: return@filter true
                 val ed = bundle.identityKey.publicKey.serializeEd()
                 !runCatching { Ed25519.validatePublicKeyFull(ed, 0) }.getOrDefault(false)
             }
@@ -767,7 +783,7 @@ class Omemo2(
         disk.ignoredDevices = (disk.ignoredDevices + stale).distinct().toMutableList()
         disk.ignoredDevices.remove(deviceId)
 
-        // Keep only devices that are still published (plus this installation).
+        // Keep only devices that are still published and usable (plus this installation).
         val keep = ((published + deviceId) - invalid.toSet()).map { "$ownJid|$it" }.toSet()
         val ownSessions = sessions.keys.filter { it.startsWith("$ownJid|") && it !in keep }
         val ownIdentities = identities.keys.filter { it.startsWith("$ownJid|") && it !in keep }
@@ -783,6 +799,31 @@ class Omemo2(
                 "${ownSessions.size} local session(s)")
         val republished = publish()
         OwnDeviceCleanup(listed, stale.size, republished)
+    }
+
+    /**
+     * Take one of our other OMEMO 2 devices off the published list and delete its bundle.
+     * Other phones republish themselves when they next connect, so a mistaken removal is
+     * recoverable. Returns true when the new list was published.
+     */
+    fun removeOwnDevice(devId: Int): Boolean = synchronized(lock) {
+        if (!conn.isConnected || devId == deviceId) return@synchronized false
+        val ownJid = runCatching { org.jxmpp.jid.impl.JidCreate.entityBareFrom(account.jid) }.getOrNull()
+            ?: return@synchronized false
+        // Suppress the device for this one publish only: publish() rebuilds the list from the
+        // server, and an active phone is added back when it republishes.
+        disk.ignoredDevices = (disk.ignoredDevices + devId).distinct().toMutableList()
+        save()
+        val published = runCatching { publish() }.getOrDefault(false)
+        disk.ignoredDevices.remove(devId)
+        save()
+        if (!published) return@synchronized false
+        runCatching {
+            PubSubManager.getInstanceFor(conn, ownJid).getLeafNode(BUNDLES).deleteItem(devId.toString())
+        }
+        forgetDevice(account.jid, devId)
+        core.addXmlLog(account.id, false, "OMEMO 2 removed device $devId from the published device list")
+        true
     }
 
     private fun signedPreKey(): SignedPreKeyRecord {
@@ -802,7 +843,7 @@ class Omemo2(
         return spk
     }
 
-    private fun fetchDevices(bareJid: String, force: Boolean = false): List<Int> {
+    private fun fetchDevices(bareJid: String, force: Boolean = false, strict: Boolean = false): List<Int> {
         watchDeviceList(bareJid)
         val now = System.currentTimeMillis()
         if (!force) deviceCache[bareJid]?.let { if (now - it.at < DEVICE_CACHE_MS) return it.devices }
@@ -811,7 +852,8 @@ class Omemo2(
             var items: List<org.jivesoftware.smackx.pubsub.Item> = node.getItems(listOf("current"))
             if (items.isEmpty()) items = node.getItems()
             val item = items.firstOrNull { it.id == "current" } ?: items.firstOrNull()
-                ?: return fallbackDevices(bareJid, "the device list has no item")
+                ?: if (strict) throw IllegalStateException("the device list has no item")
+                   else return fallbackDevices(bareJid, "the device list has no item")
             val xml = item.toXML(XmlEnvironment.EMPTY)?.toString() ?: ""
             val doc = parse(xml)
             val listed = doc.getElementsByTagNameNS(NS, "device").let { nl ->
@@ -824,6 +866,7 @@ class Omemo2(
             deviceCache[bareJid] = CachedDevices(now, listed)
             listed
         } catch (e: Exception) {
+            if (strict) throw e
             fallbackDevices(bareJid, e.message ?: e.javaClass.simpleName)
         }
     }

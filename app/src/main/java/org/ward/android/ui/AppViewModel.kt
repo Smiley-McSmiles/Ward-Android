@@ -231,6 +231,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         onResult(result)
     }
+    fun removeOwnDevice(accountId: Long, deviceId: Long, protocol: String, onResult: (String) -> Unit) =
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { core.session(accountId)?.removeOwnDevice(deviceId, protocol) ?: "Not connected" }
+                    .getOrElse { it.message ?: "Could not remove device" }
+            }
+            onResult(result)
+        }
     fun createGroup(accountId: Long, room: String, name: String, private: Boolean, description: String, invitees: List<String>) = viewModelScope.launch {
         val chat = core.ensureChat(accountId, room, "groupchat", name)
         val acc = accounts.value.firstOrNull { it.id == accountId }
