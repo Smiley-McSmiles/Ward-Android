@@ -1,10 +1,17 @@
 package org.ward.android.ui
 
+import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.Looper
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -59,12 +66,14 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -73,21 +82,33 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.ward.android.data.*
 import org.ward.android.parseReactions
+import org.ward.android.service.ScheduledMessage
+import org.ward.android.service.ScheduledSendStore
 import org.ward.android.util.AppLockStore
 import org.ward.android.util.Colors
 import org.ward.android.util.TimeUtil
 import org.ward.android.xmpp.OccupantInfo
 import java.io.File
+import java.util.Calendar
+import java.util.Locale
+import java.util.UUID
+import kotlin.coroutines.resume
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -107,8 +128,11 @@ fun ChatScreen(vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
+    val layoutDirection = LocalLayoutDirection.current
     val maxSwipe = with(LocalDensity.current) { configuration.screenWidthDp.dp.toPx() }
     var swipeOffset by remember { mutableFloatStateOf(0f) }
+    var composerHeightPx by remember(c.id) { mutableIntStateOf(0) }
+    val composerHeight = with(LocalDensity.current) { composerHeightPx.toDp() }
     fun closeChatAnimated() {
         scope.launch {
             animate(swipeOffset, maxSwipe, animationSpec = tween(220)) { value, _ -> swipeOffset = value }
@@ -133,6 +157,84 @@ fun ChatScreen(vm: AppViewModel) {
         AppLockStore.endExternalActivity()
         if (uris.isNotEmpty()) vm.sendFiles(uris)
     }
+    var attachMenu by remember { mutableStateOf(false) }
+    var cameraChoice by remember { mutableStateOf(false) }
+    var contactPicker by remember { mutableStateOf(false) }
+    var scheduleDialog by remember { mutableStateOf(false) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingCameraFile by remember { mutableStateOf<File?>(null) }
+    var pendingLocationLive by remember { mutableStateOf<Boolean?>(null) }
+
+    fun handleCameraResult(ok: Boolean) {
+        AppLockStore.endExternalActivity()
+        val uri = pendingCameraUri
+        val file = pendingCameraFile
+        pendingCameraUri = null
+        pendingCameraFile = null
+        if (ok && uri != null) vm.sendFiles(listOf(uri)) else file?.delete()
+    }
+
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        handleCameraResult(ok)
+    }
+    val captureVideo = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
+        handleCameraResult(ok)
+    }
+
+    fun launchCamera(video: Boolean) {
+        AppLockStore.beginExternalActivity()
+        val extension = if (video) "mp4" else "jpg"
+        val file = File(context.cacheDir, "camera-${System.currentTimeMillis()}.$extension")
+        val uri = runCatching {
+            FileProvider.getUriForFile(context, "org.ward.android.files", file)
+        }.getOrNull()
+        if (uri == null) {
+            file.delete()
+            android.widget.Toast.makeText(context, "Could not prepare the camera file",
+                android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingCameraUri = uri
+        pendingCameraFile = file
+        runCatching { if (video) captureVideo.launch(uri) else takePicture.launch(uri) }
+            .onFailure {
+                pendingCameraUri = null
+                pendingCameraFile = null
+                file.delete()
+                android.widget.Toast.makeText(context, "No camera app is available",
+                    android.widget.Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    val locationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        val live = pendingLocationLive
+        pendingLocationLive = null
+        if (live != null) {
+            if (granted.values.any { it }) {
+                vm.core.scope.launch { shareLocation(vm, c, context, live) }
+            } else {
+                android.widget.Toast.makeText(context, "Location permission is required",
+                    android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun requestLocation(live: Boolean) {
+        val fine = androidx.core.content.ContextCompat.checkSelfPermission(context,
+            Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = androidx.core.content.ContextCompat.checkSelfPermission(context,
+            Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (fine || coarse) {
+            vm.core.scope.launch { shareLocation(vm, c, context, live) }
+        } else {
+            pendingLocationLive = live
+            locationPermission.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION))
+        }
+    }
+
     var recorder by remember(c.id) { mutableStateOf<MediaRecorder?>(null) }
     var voiceStartedAt by remember(c.id) { mutableLongStateOf(0L) }
     // Keep the rapidly changing waveform in a State object and read it only inside the composer,
@@ -312,7 +414,8 @@ fun ChatScreen(vm: AppViewModel) {
             vm.core.session(c.accountId)?.refreshPgp(c.jid)
         }
         delay(100)
-        if (messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
+        // The last LazyColumn item is the transparent spacer under the floating composer.
+        if (messages.isNotEmpty()) listState.scrollToItem(messages.size)
         vm.markRead()
     }
     LaunchedEffect(messages.size) {
@@ -320,8 +423,8 @@ fun ChatScreen(vm: AppViewModel) {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             val nearBottom = lastVisible >= messages.size - 4
             val newest = messages.last()
-            if (nearBottom || newest.direction == 1) {
-                listState.animateScrollToItem(messages.lastIndex)
+            if ((nearBottom || newest.direction == 1) && search.isBlank()) {
+                listState.animateScrollToItem(messages.size)
             }
             vm.markRead()
         }
@@ -337,6 +440,11 @@ fun ChatScreen(vm: AppViewModel) {
         } else vm.typing("active")
     }
     val filtered = if (search.isBlank()) messages else messages.filter { it.body.contains(search, true) }
+    // Keep the newest message above the floating composer when its height changes (keyboard,
+    // voice recorder, attachment menu).
+    LaunchedEffect(composerHeightPx) {
+        if (messages.isNotEmpty() && search.isBlank()) listState.scrollToItem(messages.size)
+    }
     Scaffold(
         modifier = Modifier.fillMaxSize().imePadding()
             .offset { IntOffset(swipeOffset.roundToInt(), 0) },
@@ -420,13 +528,11 @@ fun ChatScreen(vm: AppViewModel) {
                 },
                 onAttach = {
                     if (currentVoice().open) cancelVoice()
-                    AppLockStore.beginExternalActivity()
-                    attach.launch(arrayOf("*/*"))
+                    attachMenu = true
                 },
-                onAttachImages = {
+                onCamera = {
                     if (currentVoice().open) cancelVoice()
-                    AppLockStore.beginExternalActivity()
-                    attach.launch(arrayOf("image/*"))
+                    cameraChoice = true
                 },
                 onEmoji = {
                     if (currentVoice().open) cancelVoice()
@@ -435,10 +541,16 @@ fun ChatScreen(vm: AppViewModel) {
                 sendWithEnter = (appSettings["chats.send_with"] ?: "enter") == "enter",
                 voiceState = voiceState,
                 onVoiceClick = { toggleVoice() },
-                onVoiceAction = { handleVoiceAction(it) })
+                onVoiceAction = { handleVoiceAction(it) },
+                onHeightChanged = { composerHeightPx = it })
         }
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
+        // Ignore the bottom bar inset: the transparent composer floats over the messages so
+        // they remain visible behind the pill and recorder instead of being clipped by a panel.
+        Column(Modifier.fillMaxSize().padding(
+            start = pad.calculateStartPadding(layoutDirection),
+            top = pad.calculateTopPadding(),
+            end = pad.calculateEndPadding(layoutDirection))) {
             if (account != null && states[account.id]?.state != "online") {
                 Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
                     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -541,6 +653,9 @@ fun ChatScreen(vm: AppViewModel) {
                                 onLongPress = { selectedMessage = m },
                                 onReply = { replyTo = m; editing = null }, onReact = { vm.react(m, it) })
                         }
+                        item(key = "composer-space") {
+                            Spacer(Modifier.height(composerHeight))
+                        }
                     }
                 }
             }
@@ -568,6 +683,74 @@ fun ChatScreen(vm: AppViewModel) {
             text += emoji
             composerEmoji = false
         }
+    }
+    if (attachMenu) {
+        AttachmentMenu(
+            onDismiss = { attachMenu = false },
+            onGallery = {
+                attachMenu = false
+                AppLockStore.beginExternalActivity()
+                attach.launch(arrayOf("image/*"))
+            },
+            onCamera = { attachMenu = false; cameraChoice = true },
+            onGifs = {
+                attachMenu = false
+                AppLockStore.beginExternalActivity()
+                attach.launch(arrayOf("image/gif"))
+            },
+            onFiles = {
+                attachMenu = false
+                AppLockStore.beginExternalActivity()
+                attach.launch(arrayOf("*/*"))
+            },
+            onLiveLocation = { attachMenu = false; requestLocation(true) },
+            onContacts = { attachMenu = false; contactPicker = true },
+            onSchedule = {
+                attachMenu = false
+                if (text.isBlank()) {
+                    android.widget.Toast.makeText(context, "Type a message before scheduling it",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                } else scheduleDialog = true
+            },
+            onOneTimeLocation = { attachMenu = false; requestLocation(false) }
+        )
+    }
+    if (cameraChoice) {
+        CameraChoiceDialog(
+            onDismiss = { cameraChoice = false },
+            onPhoto = { cameraChoice = false; launchCamera(false) },
+            onVideo = { cameraChoice = false; launchCamera(true) }
+        )
+    }
+    if (contactPicker) {
+        ContactShareDialog(
+            contacts = contacts.filter { it.accountId == c.accountId },
+            onDismiss = { contactPicker = false },
+            onPick = { contact ->
+                contactPicker = false
+                vm.send("Contact: ${contact.name}\nXMPP: xmpp:${contact.jid}", null)
+            }
+        )
+    }
+    if (scheduleDialog) {
+        ScheduleSendDialog(
+            onDismiss = { scheduleDialog = false },
+            onSchedule = { at, label ->
+                if (text.isNotBlank()) {
+                    ScheduledSendStore.add(context, ScheduledMessage(
+                        id = UUID.randomUUID().toString(),
+                        chatId = c.id,
+                        accountId = c.accountId,
+                        text = text,
+                        at = at
+                    ))
+                    text = ""
+                    scheduleDialog = false
+                    android.widget.Toast.makeText(context, "Message scheduled: $label",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
     }
     if (passwordOpen) {
         var pw by remember { mutableStateOf("") }
@@ -779,11 +962,12 @@ data class VoiceUiState(
 @Composable
 fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: MessageEntity?, editing: MessageEntity?,
              onCancelReply: () -> Unit, onSend: () -> Unit, onAttach: () -> Unit,
-             onAttachImages: () -> Unit = {}, onEmoji: () -> Unit = {},
+             onCamera: () -> Unit = {}, onEmoji: () -> Unit = {},
              sendWithEnter: Boolean = true,
              voiceState: State<VoiceUiState>,
              onVoiceClick: () -> Unit = {},
-             onVoiceAction: (VoiceAction) -> Unit = {}) {
+             onVoiceAction: (VoiceAction) -> Unit = {},
+             onHeightChanged: (Int) -> Unit = {}) {
     val voice by voiceState
     val enterModifier = if (sendWithEnter) {
         Modifier.onPreviewKeyEvent { event ->
@@ -796,7 +980,7 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
     // The composer sits directly over the chat background; only the input pill and the open
     // recorder card should be visible, not a full-width panel behind them.
     Surface(color = Color.Transparent, tonalElevation = 0.dp,
-        modifier = Modifier.navigationBarsPadding()) {
+        modifier = Modifier.navigationBarsPadding().onSizeChanged { onHeightChanged(it.height) }) {
         Column {
             AnimatedVisibility(visible = replyTo != null || editing != null,
                 enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
@@ -848,8 +1032,8 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (text.isBlank()) {
-                            IconButton(onClick = onAttachImages, enabled = !voice.open) {
-                                Icon(Icons.Outlined.Image, "Send image",
+                            IconButton(onClick = onCamera, enabled = !voice.open) {
+                                Icon(Icons.Outlined.Image, "Open camera",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         } else {
@@ -1089,6 +1273,200 @@ private fun VoiceRoundButton(icon: androidx.compose.ui.graphics.vector.ImageVect
         shape = RoundedCornerShape(28.dp), contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content)) {
         Icon(icon, null, Modifier.size(24.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AttachmentMenu(
+    onDismiss: () -> Unit,
+    onGallery: () -> Unit,
+    onCamera: () -> Unit,
+    onGifs: () -> Unit,
+    onFiles: () -> Unit,
+    onLiveLocation: () -> Unit,
+    onContacts: () -> Unit,
+    onSchedule: () -> Unit,
+    onOneTimeLocation: () -> Unit
+) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+        dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 30.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AttachmentTile("Gallery", Icons.Outlined.PhotoLibrary, onGallery, Modifier.weight(1f))
+                AttachmentTile("Camera", Icons.Outlined.PhotoCamera, onCamera, Modifier.weight(1f))
+                AttachmentTile("GIFs", Icons.Filled.Gif, onGifs, Modifier.weight(1f))
+                AttachmentTile("Files", Icons.Outlined.AttachFile, onFiles, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(20.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AttachmentTile("Real-time\nLocation", Icons.Outlined.MyLocation, onLiveLocation, Modifier.weight(1f))
+                AttachmentTile("Contacts", Icons.Outlined.Person, onContacts, Modifier.weight(1f))
+                AttachmentTile("Schedule\nSend", Icons.Outlined.Schedule, onSchedule, Modifier.weight(1f))
+                AttachmentTile("One-time\nLocation", Icons.Outlined.LocationOn, onOneTimeLocation, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentTile(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+                          onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(shape = RoundedCornerShape(30.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            modifier = Modifier.size(72.dp)) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(28.dp))
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center,
+            maxLines = 2, minLines = 2, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun CameraChoiceDialog(onDismiss: () -> Unit, onPhoto: () -> Unit, onVideo: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Camera") },
+        text = { Text("Take a photo or record a video.") },
+        confirmButton = { TextButton(onClick = onPhoto) { Text("Photo") } },
+        dismissButton = { TextButton(onClick = onVideo) { Text("Video") } })
+}
+
+@Composable
+private fun ContactShareDialog(contacts: List<ContactEntity>, onDismiss: () -> Unit,
+                               onPick: (ContactEntity) -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Share a contact") },
+        text = {
+            if (contacts.isEmpty()) {
+                Text("No contacts yet.")
+            } else {
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(contacts, key = { "${it.accountId}:${it.jid}" }) { contact ->
+                        Row(Modifier.fillMaxWidth().clickable { onPick(contact) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(contact.name, 36, photo = contact.avatar)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(contact.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(contact.jid, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@Composable
+private fun ScheduleSendDialog(onDismiss: () -> Unit, onSchedule: (Long, String) -> Unit) {
+    val now = System.currentTimeMillis()
+    fun tomorrowMorning(): Long = Calendar.getInstance().apply {
+        add(Calendar.DAY_OF_YEAR, 1)
+        set(Calendar.HOUR_OF_DAY, 9)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Schedule send") },
+        text = {
+            Column {
+                Text("Ward will send this message later, as long as the account can reconnect at that time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                listOf(15L to "In 15 minutes", 60L to "In 1 hour", 180L to "In 3 hours").forEach { (minutes, label) ->
+                    TextButton(onClick = { onSchedule(now + minutes * 60_000L, label.lowercase()) }) {
+                        Text(label)
+                    }
+                }
+                TextButton(onClick = { onSchedule(tomorrowMorning(), "tomorrow at 9:00") }) {
+                    Text("Tomorrow at 9:00")
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+private fun locationText(location: Location, live: Boolean): String {
+    val lat = String.format(Locale.US, "%.6f", location.latitude)
+    val lon = String.format(Locale.US, "%.6f", location.longitude)
+    val label = if (live) "Live location" else "One-time location"
+    return "$label: https://www.openstreetmap.org/?mlat=$lat&mlon=$lon#map=16/$lat/$lon"
+}
+
+private suspend fun readLocation(context: Context): Location? = withContext(Dispatchers.Main) {
+    val manager = context.getSystemService(LocationManager::class.java)
+        ?: return@withContext null
+    val fine = androidx.core.content.ContextCompat.checkSelfPermission(context,
+        Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val providers = if (fine) {
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+    } else {
+        listOf(LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)
+    }
+    val last = providers.mapNotNull {
+        runCatching { manager.getLastKnownLocation(it) }.getOrNull()
+    }.maxByOrNull { it.time }
+    if (last != null && System.currentTimeMillis() - last.time < 10 * 60_000L) {
+        return@withContext last
+    }
+    val provider = providers.firstOrNull {
+        runCatching { manager.isProviderEnabled(it) }.getOrDefault(false)
+    } ?: return@withContext last
+    val fresh = withTimeoutOrNull(8_000L) {
+        suspendCancellableCoroutine { continuation ->
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    manager.removeUpdates(this)
+                    if (continuation.isActive) continuation.resume(location)
+                }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }
+            @Suppress("DEPRECATION")
+            runCatching {
+                manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+            }.onFailure {
+                manager.removeUpdates(listener)
+                if (continuation.isActive) continuation.resume(last)
+            }
+            continuation.invokeOnCancellation { manager.removeUpdates(listener) }
+        }
+    }
+    fresh ?: last
+}
+
+private suspend fun shareLocation(vm: AppViewModel, chat: ChatEntity, context: Context, live: Boolean) {
+    val location = readLocation(context)
+    if (location == null) {
+        withContext(Dispatchers.Main) {
+            android.widget.Toast.makeText(context, "Could not get the current location",
+                android.widget.Toast.LENGTH_SHORT).show()
+        }
+        return
+    }
+    val stored = vm.core.sendText(chat, locationText(location, live), null)
+    withContext(Dispatchers.Main) {
+        android.widget.Toast.makeText(context,
+            if (live) "Sharing live location for 15 minutes" else "Location shared",
+            android.widget.Toast.LENGTH_SHORT).show()
+    }
+    if (!live) return
+    val end = System.currentTimeMillis() + 15 * 60_000L
+    while (System.currentTimeMillis() < end) {
+        delay(60_000L)
+        val next = readLocation(context) ?: continue
+        val currentChat = vm.core.dao.chat(chat.id) ?: break
+        val currentMessage = vm.core.dao.message(stored.id) ?: break
+        vm.core.edit(currentChat, currentMessage, locationText(next, true))
     }
 }
 
