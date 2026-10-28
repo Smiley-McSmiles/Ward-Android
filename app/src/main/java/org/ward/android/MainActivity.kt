@@ -5,14 +5,18 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.ward.android.service.WardService
 import org.ward.android.ui.AppViewModel
 import org.ward.android.ui.WardApp
@@ -28,6 +32,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WardCore.init(applicationContext)
+        val settings = WardCore.get().settings
+        applyScreenshotPolicy(settings.bool("security.block_screenshots"))
+        lifecycleScope.launch {
+            settings.state.collect { applyScreenshotPolicy(it["security.block_screenshots"] == "true") }
+        }
         handleIntent(intent)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -59,6 +68,16 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         intent?.getLongExtra(EXTRA_OPEN_CHAT, 0L)?.takeIf { it > 0L }?.let { pendingChatId.value = it }
         intent?.data?.takeIf { it.scheme == "xmpp" }?.let { pendingJid.value = JidUtil.bare(it.toString()) }
+    }
+
+    /**
+     * FLAG_SECURE keeps the window out of screenshots, screen recordings and the recent-apps
+     * thumbnail. It is applied here rather than in Compose so it is in place before the first
+     * frame, and it is updated live when the security preference changes.
+     */
+    private fun applyScreenshotPolicy(enabled: Boolean) {
+        if (enabled) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
 
     companion object {

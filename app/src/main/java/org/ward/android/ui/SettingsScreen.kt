@@ -232,7 +232,7 @@ private fun pageSubtitle(key: String): String? = when (key) {
     "notifications" -> "Content, highlighting, quiet hours and sounds"
     "encryption" -> "OMEMO, OpenPGP, devices and keys"
     "privacy" -> "Photo metadata and messages from strangers"
-    "security" -> "App lock and failed-attempt protection"
+    "security" -> "App lock, screen privacy and failed-attempt protection"
     "accounts" -> "Accounts, photos and status"
     "storage" -> "Cache size and downloaded files"
     "advanced" -> "Connection timings and diagnostics"
@@ -491,7 +491,7 @@ fun PageIntro(key: String) {
         "accounts" -> Triple(Icons.Filled.People, "Accounts on this device",
             "Each account has its own profile, encryption identity and notification behaviour.")
         "security" -> Triple(Icons.Filled.Lock, "Lock Ward",
-            "A PIN, password or pattern keeps local messages and encryption keys private.")
+            "A PIN, password or pattern keeps local messages and encryption keys private. You can also block screenshots and the recent-apps preview.")
         else -> Triple(Icons.Filled.Settings, "Preferences", "")
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {

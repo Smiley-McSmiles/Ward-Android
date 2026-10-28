@@ -24,7 +24,9 @@ tracks the desktop feature set and what the Android front end does today.
 | Server administration (XEP-0050), every Prosody/ejabberd command, forms, CAPTCHA | Yes, tested against Prosody 13 |
 | User counts, online/registered user lists, uptime, account invites | Yes |
 | XML console, service discovery browser, debug log | Yes |
-| Notifications, background connection, boot autostart | Yes |
+| Notifications, background connection, boot autostart | Yes, with a `remoteMessaging` foreground service |
+| Stream management and resumption (XEP-0198) | Yes when the server supports it; reconnects reuse the connection so a dropped stream can resume |
+| Block screenshots and the recent-apps preview | Optional, under Security |
 | Preferences generated from a typed schema | Yes, grouped by General, Appearance, Chats, Calls, Attachments, Notifications, Encryption, Privacy, Security, Accounts, Storage and Advanced |
 | OMEMO (XEP-0384 legacy), device fingerprints, trust, BTBV | Yes |
 | OMEMO 2 / SCE (XEP-0384 v0.8) | Yes: one-to-one, Ed25519 device bundles, SCE payloads, encrypted replies/reactions/edits/retractions; legacy OMEMO 0.3 fallback for contacts with only legacy devices |

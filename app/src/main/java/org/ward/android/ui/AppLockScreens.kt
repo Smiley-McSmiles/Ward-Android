@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -161,6 +162,8 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
     var maxAttempts by remember { mutableStateOf(AppLockStore.maxAttempts(context)) }
     var lockoutSeconds by remember { mutableStateOf(AppLockStore.lockoutSeconds(context)) }
     var lockDelaySeconds by remember { mutableStateOf(AppLockStore.lockDelaySeconds(context)) }
+    val settings by vm.settings.state.collectAsState()
+    val blockScreenshots = settings["security.block_screenshots"] == "true"
 
     BackHandler { onBack() }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
@@ -215,6 +218,21 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+            }
+
+            SettingsSectionLabel("Screen privacy")
+            SettingsGroup {
+                PanelListItem(
+                    headlineContent = { Text("Block screenshots and screen recording", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text("Hides Ward in the recent-apps preview and blocks screenshots or screen recordings. " +
+                            "QR codes and attachments cannot be captured while this is on.")
+                    },
+                    leadingContent = { SettingsIconTile(Icons.Filled.VisibilityOff, WardIconColors.teal) },
+                    trailingContent = {
+                        Switch(checked = blockScreenshots,
+                            onCheckedChange = { vm.settings.set("security.block_screenshots", it) })
+                    })
             }
 
             SettingsSectionLabel("Failed attempts")

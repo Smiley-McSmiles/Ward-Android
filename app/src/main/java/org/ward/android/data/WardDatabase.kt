@@ -8,7 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(entities = [AccountEntity::class, ContactEntity::class, ChatEntity::class, MessageEntity::class,
-    DeviceEntity::class, ReceiptEntity::class, RequestEntity::class, PgpKeyEntity::class], version = 5, exportSchema = false)
+    DeviceEntity::class, ReceiptEntity::class, RequestEntity::class, PgpKeyEntity::class], version = 5, exportSchema = true)
 abstract class WardDatabase : RoomDatabase() {
     abstract fun dao(): WardDao
     companion object {
@@ -57,9 +57,15 @@ abstract class WardDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE devices_new RENAME TO devices")
             }
         }
+        /**
+         * The complete migration chain. Migration tests use this same list so a migration
+         * cannot be added to the app but forgotten by the tests (or vice versa).
+         */
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+
         fun get(context: Context): WardDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, WardDatabase::class.java, "ward.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(*MIGRATIONS)
                 // Never fall back to a destructive migration: wiping the database changes account
                 // ids and device rows, and can make the app look like it lost its OMEMO identity
                 // on an update. Any schema change must ship an explicit migration instead.

@@ -149,6 +149,11 @@ object SettingsSchema {
         c("privacy.strangers", "Messages from strangers", "What to do when someone you have not added writes to you", "privacy", "Strangers", "requests",
             "requests" to "Requests folder", "block" to "Block", "allow" to "Allow"),
 
+        // ------------------------------------------------------------ Security
+        b("security.block_screenshots", "Block screenshots and screen recording",
+            "Also hides Ward in the recent-apps preview. QR codes and media cannot be captured while this is on.",
+            "security", "Screen privacy"),
+
         // ------------------------------------------------------------ Advanced
         i("advanced.keepalive", "Keepalive ping interval", "Seconds between pings that keep the connection alive", "advanced", "Connection", 60, 30, 600, 30, "seconds"),
         i("advanced.reconnect_cap", "Reconnect delay cap", "Longest wait between reconnection attempts", "advanced", "Connection", 5, 1, 30, 1, "minutes")

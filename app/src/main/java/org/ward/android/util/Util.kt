@@ -109,12 +109,24 @@ object SecretStore {
             .setKeySize(256).build())
         return gen.generateKey()
     }
+    /**
+     * Encrypt a password with a non-exportable Android Keystore key. There is deliberately no
+     * plaintext fallback: if the keystore is unavailable, saving the password must fail instead
+     * of silently degrading to Base64.
+     */
     fun encrypt(plain: String): String = try {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
         "enc:" + Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
             Base64.encodeToString(cipher.doFinal(plain.toByteArray()), Base64.NO_WRAP)
-    } catch (_: Exception) { "b64:" + Base64.encodeToString(plain.toByteArray(), Base64.NO_WRAP) }
+    } catch (e: Exception) {
+        throw IllegalStateException(
+            "Android secure storage is unavailable, so the password could not be saved.", e)
+    }
+
+    /** Encrypt without throwing, for UI paths that can continue with an in-memory password. */
+    fun encryptOrNull(plain: String): String? = runCatching { encrypt(plain) }.getOrNull()
+
     fun decrypt(stored: String): String = try {
         when {
             stored.startsWith("enc:") -> {
@@ -123,6 +135,8 @@ object SecretStore {
                 cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
                 String(cipher.doFinal(Base64.decode(data, Base64.NO_WRAP)))
             }
+            // Older builds could fall back to Base64 when the keystore failed. Keep reading those
+            // values so existing accounts still work, but never write a new one.
             stored.startsWith("b64:") -> String(Base64.decode(stored.removePrefix("b64:"), Base64.NO_WRAP))
             else -> stored
         }

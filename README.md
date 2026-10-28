@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Smiley-McSmiles/Ward-Android/releases"><img src="https://img.shields.io/badge/version-1.0.4-blue.svg?style=flat-square" alt="Version 1.0.4"></a>
+  <a href="https://github.com/Smiley-McSmiles/Ward-Android/releases"><img src="https://img.shields.io/badge/version-1.0.5-blue.svg?style=flat-square" alt="Version 1.0.5"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.0">
   <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4.svg?style=flat-square" alt="Jetpack Compose and Material 3">
@@ -48,9 +48,10 @@ Conversations, Monal, Dino, Gajim and Ward for GTK.
   online and registered user lists, uptime and account invites.
 - **Tools when you need them.** A live XML console with raw stanza sending, a service discovery browser, a debug log,
   and a preference screen generated from a typed schema.
-- **A good Android citizen.** A foreground connection service, notifications with chat deep links, boot autostart,
-  share and open intents, adaptive Material 3 with light, dark and accent colours, and no bottom navigation bar
-  stealing space from your conversations.
+- **A good Android citizen.** A `remoteMessaging` foreground connection service with XEP-0198 stream
+  management and resumption when the server supports it, notifications with chat deep links, boot autostart, share and open intents,
+  adaptive Material 3 with light, dark and accent colours, and no bottom navigation bar stealing space
+  from your conversations. Optionally block screenshots and the recent-apps preview under Security.
 
 ## Encryption
 

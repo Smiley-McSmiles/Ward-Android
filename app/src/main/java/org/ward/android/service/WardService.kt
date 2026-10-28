@@ -4,9 +4,12 @@ import android.app.*
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
@@ -26,7 +29,12 @@ class WardService : Service() {
         core = WardCore.get()
         createChannels()
         try {
-            startForeground(FOREGROUND_ID, connectionNotification(0, 0))
+            // remoteMessaging is the correct type for a persistent XMPP connection. dataSync
+            // would be subject to Android 15's six-hour-per-day timeout and cannot be started
+            // from BOOT_COMPLETED, both of which would break background delivery.
+            val type = if (Build.VERSION.SDK_INT >= 34)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0
+            ServiceCompat.startForeground(this, FOREGROUND_ID, connectionNotification(0, 0), type)
         } catch (e: Exception) {
             // Android 12+ may refuse a foreground service start from a background restart.
             // Do not take the whole app down; the next foreground launch will reconnect.
@@ -68,6 +76,18 @@ class WardService : Service() {
         core.notificationDismissSink = null
         scope.cancel()
         super.onDestroy()
+    }
+
+    /**
+     * Android 15 calls this when a time-limited foreground service type reaches its limit.
+     * remoteMessaging is not currently time-limited, but if a future platform version applies a
+     * limit the service must stop within a few seconds or the process is killed with a fatal
+     * exception. Stopping cleanly lets the next app launch reconnect.
+     */
+    @RequiresApi(35)
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

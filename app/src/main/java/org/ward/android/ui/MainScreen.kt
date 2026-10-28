@@ -261,7 +261,9 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                 visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), singleLine = true) },
             confirmButton = { TextButton(onClick = {
                 val a = passwordFor!!; passwordFor = null
-                vm.core.scope.launch { vm.core.updateAccount(a.copy(encryptedPassword = org.ward.android.util.SecretStore.encrypt(pw))) }
+                org.ward.android.util.SecretStore.encryptOrNull(pw)?.let { stored ->
+                    vm.core.scope.launch { vm.core.updateAccount(a.copy(encryptedPassword = stored)) }
+                }
                 vm.connect(a, pw)
             }) { Text("Connect") } },
             dismissButton = { TextButton(onClick = { passwordFor = null }) { Text("Cancel") } })

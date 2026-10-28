@@ -419,7 +419,15 @@ fun ChatScreen(vm: AppViewModel) {
         AlertDialog(onDismissRequest = { passwordOpen = false }, title = { Text("Password") },
             text = { OutlinedTextField(pw, { pw = it }, label = { Text("Password for ${account?.jid}") },
                 visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), singleLine = true) },
-            confirmButton = { TextButton(onClick = { passwordOpen = false; account?.let { a -> vm.connect(a, pw); vm.core.scope.launch { vm.core.updateAccount(a.copy(encryptedPassword = org.ward.android.util.SecretStore.encrypt(pw))) } } }) { Text("Connect") } },
+            confirmButton = { TextButton(onClick = {
+                passwordOpen = false
+                account?.let { a ->
+                    vm.connect(a, pw)
+                    org.ward.android.util.SecretStore.encryptOrNull(pw)?.let { stored ->
+                        vm.core.scope.launch { vm.core.updateAccount(a.copy(encryptedPassword = stored)) }
+                    }
+                }
+            }) { Text("Connect") } },
             dismissButton = { TextButton(onClick = { passwordOpen = false }) { Text("Cancel") } })
     }
 }

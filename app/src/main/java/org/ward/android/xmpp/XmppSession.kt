@@ -123,6 +123,13 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private var reconnectDelay = 2000L
     private var mamSynced = false
     private var roster: Roster? = null
+    /**
+     * Whether this connection object has already had its roster/message/OMEMO listeners
+     * installed. The connection is deliberately reused across reconnects so XEP-0198 can resume
+     * the stream; installing a second set of listeners on every reconnect would duplicate
+     * messages and leak listeners.
+     */
+    private var sessionConfigured = false
 
     sealed class EncryptedPayload {
         data class Omemo(val message: OmemoMessage.Sent) : EncryptedPayload()
@@ -148,9 +155,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     fun stop() {
         running = false
         online = false
+        sessionConfigured = false
         omemo2ListWatch?.cancel()
         omemo2ListWatch = null
         runCatching { call.finish() }
+        // A clean disconnect drops the XEP-0198 state, so the next session starts fresh.
         runCatching { connection?.disconnect() }
         connection = null
         rooms.clear()
@@ -163,13 +172,27 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 core.onState(account.id, ConnectionState("connecting", "Looking up the server…"))
                 doConnect()
                 reconnectDelay = 2000L
-                while (running && connection?.isConnected == true) delay(1000)
+                // Smack keeps isConnected() true while an XEP-0198 stream can still be resumed.
+                // Exit the wait loop in that state too, otherwise the session would sit forever
+                // on a dead socket instead of reconnecting and sending <resume>.
+                while (running && connection?.let { it.isConnected && !it.isDisconnectedButSmResumptionPossible() } == true) {
+                    delay(1000)
+                }
                 online = false
-                rooms.clear()
+                // Keep the MultiUserChat objects while a resumed stream is possible: the server
+                // still considers us joined. They are cleared in afterLogin() if resumption fails
+                // and a full re-login has to rejoin the rooms.
                 if (!running) break
                 core.onState(account.id, ConnectionState("error", "", "Connection lost"))
             } catch (e: Exception) {
                 online = false
+                // A failed attempt before any authenticated session is not resumable. Recreate
+                // the connection next time so a half-initialised socket cannot poison every retry.
+                if (connection?.isAuthenticated != true && connection?.isConnected != true) {
+                    runCatching { connection?.disconnect() }
+                    connection = null
+                    sessionConfigured = false
+                }
                 if (!running) break
                 core.onState(account.id, ConnectionState("error", "", friendlyError(e)))
             }
@@ -211,7 +234,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }
     }
 
-    private fun doConnect() {
+    private fun createConnection(): WardXmppConnection {
         val domain = account.domain
         val builder = XMPPTCPConnectionConfiguration.builder()
             .setXmppDomain(domain)
@@ -230,7 +253,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         val conn = WardXmppConnection(builder.build()) { message ->
             core.addXmlLog(account.id, true, message)
         }
-        connection = conn
+        // XEP-0198 has to be enabled before the stream is opened. Resumption also requires the
+        // same connection object across reconnect attempts, which is why doConnect() reuses it.
+        conn.setUseStreamManagement(true)
+        conn.setUseStreamManagementResumption(true)
+        conn.setPreferredResumptionTime(300)
         conn.addConnectionListener(object : AbstractConnectionListener() {
             override fun connected(c: XMPPConnection) {
                 core.addXmlLog(account.id, false, "connected to ${c.host}:${c.port}")
@@ -244,17 +271,44 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 core.addXmlLog(account.id, false, "connection error: ${e.message}\n${e.stackTraceToString()}")
             }
         })
+        return conn
+    }
+
+    private fun doConnect() {
+        val conn = connection ?: createConnection().also { connection = it }
         core.onState(account.id, ConnectionState("connecting", "Securing the connection…"))
         mamSynced = false
         conn.connect()
-        if (!conn.isAuthenticated) conn.login(account.localpart, password, Resourcepart.from(opt("resource", "Ward Android").ifBlank { "Ward Android" }))
+        // When a stream is resumable Smack intentionally keeps isAuthenticated() true; calling
+        // login() is what sends <resume>. Without this check the session would never use the
+        // stream it is holding open for resumption.
+        val attemptingResume = conn.isDisconnectedButSmResumptionPossible()
+        // The server may start replaying stanzas as soon as it accepts <resume>, before login()
+        // returns. Mark the session online first so those messages are not discarded.
+        if (attemptingResume) online = true
+        if (!conn.isAuthenticated || attemptingResume) {
+            conn.login(account.localpart, password,
+                Resourcepart.from(opt("resource", "Ward Android").ifBlank { "Ward Android" }))
+        }
+        val resumed = conn.streamWasResumed()
         online = true
         core.onState(account.id, ConnectionState("online"))
-        core.addXmlLog(account.id, false, "signed in as ${account.jid}")
-        afterLogin(conn)
+        if (resumed) {
+            core.addXmlLog(account.id, false,
+                "XEP-0198 stream resumed; unacknowledged stanzas were replayed by the server")
+            // Messages composed while the socket was down still need to be sent.
+            scope.launch { runCatching { flushOutbox() } }
+        } else {
+            core.addXmlLog(account.id, false,
+                "signed in as ${account.jid} (stream management ${if (conn.isSmEnabled) "enabled" else "unavailable"})")
+            afterLogin(conn, firstSession = !sessionConfigured)
+            sessionConfigured = true
+        }
     }
 
-    private fun afterLogin(conn: XMPPTCPConnection) {
+    private fun afterLogin(conn: XMPPTCPConnection, firstSession: Boolean) {
+        // A full re-login means any previous MUC joins are gone; a resumed stream keeps them.
+        if (!firstSession) rooms.clear()
         try {
             val presence = Presence(Presence.Type.available)
             conn.sendStanza(presence)
@@ -266,14 +320,25 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             "urn:xmpp:jingle:transports:ice-udp:1", "urn:xmpp:jingle:apps:dtls:0",
             "urn:xmpp:jingle-message:0", "urn:ietf:rfc:3264"
         )) disco.addFeature(feature)
-        setupRoster(conn)
-        setupMessageListeners(conn)
-        setupManagers(conn)
+        if (firstSession) {
+            setupRoster(conn)
+            setupMessageListeners(conn)
+            setupManagers(conn)
+        } else {
+            // Listeners and managers stay attached to the reused connection. Refresh the roster
+            // so changes made while offline are reflected without adding duplicate listeners.
+            roster?.let { r ->
+                scope.launch {
+                    runCatching { r.reloadAndWait() }
+                    syncRoster(r)
+                }
+            }
+        }
         scope.launch {
-            runCatching { setupOmemo(conn) }
-            runCatching { setupOmemo2(conn) }
-            runCatching { setupAdmin(conn) }
-            runCatching { setupOpenPgp(conn) }
+            if (firstSession || omemo == null) runCatching { setupOmemo(conn) }
+            if (firstSession || omemo2 == null) runCatching { setupOmemo2(conn) }
+            if (firstSession || admin == null) runCatching { setupAdmin(conn) }
+            if (firstSession) runCatching { setupOpenPgp(conn) }
             runCatching { syncMam(conn) }
             runCatching { joinBookmarks() }
             runCatching { flushOutbox() }
@@ -795,9 +860,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             mgr.watchOwnDeviceList()
             omemo2ListWatch?.cancel()
             omemo2ListWatch = scope.launch {
-                while (running && online) {
+                // Keep the job alive across reconnects; only check the device list while the
+                // session is actually online.
+                while (running) {
                     delay(30_000L)
-                    runCatching { omemo2?.ensureOwnDeviceListed() }
+                    if (online) runCatching { omemo2?.ensureOwnDeviceListed() }
                 }
             }
             runBlocking(Dispatchers.IO) {
@@ -2200,7 +2267,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     fun setPassword(pw: String) {
-        account = account.copy(encryptedPassword = org.ward.android.util.SecretStore.encrypt(pw))
+        val stored = org.ward.android.util.SecretStore.encryptOrNull(pw) ?: return
+        account = account.copy(encryptedPassword = stored)
         scope.launch { core.dao.updateAccount(account) }
     }
 

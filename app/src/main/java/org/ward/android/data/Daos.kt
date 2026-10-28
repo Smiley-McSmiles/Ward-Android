@@ -12,6 +12,7 @@ interface WardDao {
     @Update suspend fun updateAccount(a: AccountEntity)
     @Query("DELETE FROM accounts WHERE id=:id") suspend fun deleteAccount(id: Long)
     @Query("UPDATE accounts SET isAdmin=:admin WHERE id=:id") suspend fun setAdmin(id: Long, admin: Boolean)
+    @Query("UPDATE accounts SET encryptedPassword=:password WHERE id=:id") suspend fun setAccountPassword(id: Long, password: String)
 
     @Query("SELECT * FROM contacts ORDER BY jid") fun contacts(): Flow<List<ContactEntity>>
     @Query("SELECT * FROM contacts WHERE accountId=:accountId ORDER BY jid") fun contacts(accountId: Long): Flow<List<ContactEntity>>

@@ -83,6 +83,7 @@ class CoreTests {
         assertEquals(setOf("Calls", "Audio", "Network", "Sounds"), groups["calls"])
         assertEquals(setOf("Sending", "Receiving"), groups["attachments"])
         assertEquals(setOf("Photos", "Strangers"), groups["privacy"])
+        assertEquals(setOf("Screen privacy"), groups["security"])
         assertTrue("Background" in groups["general"].orEmpty())
         assertTrue("Encryption" in groups["encryption"].orEmpty())
 
