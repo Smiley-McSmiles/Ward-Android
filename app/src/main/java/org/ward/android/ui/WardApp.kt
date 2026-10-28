@@ -17,24 +17,30 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
+import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import org.ward.android.MainActivity
 import org.ward.android.WardCore
 import org.ward.android.service.WardService
+import org.ward.android.util.AppLockPolicy
 import org.ward.android.util.AppLockStore
 
 @Composable
-fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? = null) {
+fun WardApp(vm: AppViewModel) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var unlocked by remember {
         val enabled = AppLockStore.isEnabled(context)
-        val backgroundAt = AppLockStore.backgroundAt(context)
-        val now = android.os.SystemClock.elapsedRealtime()
-        val delayMs = AppLockStore.lockDelaySeconds(context) * 1_000L
-        val stillWithinDelay = delayMs > 0 && backgroundAt > 0 && now >= backgroundAt && now - backgroundAt < delayMs
-        mutableStateOf(!enabled || AppLockStore.externalActivityActive() || stillWithinDelay)
+        mutableStateOf(AppLockPolicy.startUnlocked(
+            enabled = enabled,
+            sessionUnlocked = AppLockStore.sessionUnlocked(),
+            externalActivity = AppLockStore.externalActivityActive(),
+            backgroundAt = AppLockStore.backgroundAt(context),
+            now = SystemClock.elapsedRealtime(),
+            lockDelayMs = AppLockStore.lockDelaySeconds(context) * 1_000L,
+        ))
     }
     val currentlyUnlocked by rememberUpdatedState(unlocked)
     DisposableEffect(lifecycleOwner, context) {
@@ -43,11 +49,11 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
                 Lifecycle.Event.ON_START -> {
                     val backgroundAt = AppLockStore.backgroundAt(context)
                     AppLockStore.clearBackgroundAt(context)
-                    if (currentlyUnlocked && backgroundAt > 0L && AppLockStore.isEnabled(context) &&
-                        !AppLockStore.externalActivityActive()) {
-                        val delayMs = AppLockStore.lockDelaySeconds(context) * 1_000L
-                        val elapsed = android.os.SystemClock.elapsedRealtime() - backgroundAt
-                        if (delayMs <= 0L || elapsed >= delayMs) unlocked = false
+                    val now = SystemClock.elapsedRealtime()
+                    if (AppLockStore.isEnabled(context) && !AppLockStore.externalActivityActive() &&
+                        AppLockPolicy.lockOnReturn(backgroundAt, now, AppLockStore.lockDelaySeconds(context) * 1_000L)) {
+                        AppLockStore.setSessionUnlocked(false)
+                        unlocked = false
                     }
                     vm.core.setAppForeground(unlocked)
                 }
@@ -100,8 +106,22 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
         if (accounts.isNotEmpty()) {
             if (runInBackground) WardService.start(vm.getApplication())
             else WardService.stop(vm.getApplication())
-            if (initialChatId != null) vm.selectChatById(initialChatId)
-            if (initialJid != null) vm.openChat(accounts.first().id, initialJid)
+        }
+    }
+    // Notification taps and xmpp: links are delivered to the running activity instead of a new
+    // one, so a chat request can arrive while the UI is already composed.
+    val pendingChatId by MainActivity.pendingChatId.collectAsState()
+    val pendingJid by MainActivity.pendingJid.collectAsState()
+    LaunchedEffect(pendingChatId, pendingJid, accounts.size) {
+        val account = accounts.firstOrNull() ?: return@LaunchedEffect
+        val jid = pendingJid
+        if (jid != null) {
+            vm.openChat(account.id, jid)
+            MainActivity.pendingJid.value = null
+        } else {
+            val id = pendingChatId ?: return@LaunchedEffect
+            vm.selectChatById(id)
+            MainActivity.pendingChatId.value = null
         }
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -124,7 +144,10 @@ fun WardApp(vm: AppViewModel, initialChatId: Long? = null, initialJid: String? =
         AnimatedVisibility(visible = !unlocked, enter = fadeIn(tween(120)),
             exit = slideOutVertically(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it },
             label = "unlock") {
-            AppUnlockScreen(context) { unlocked = true }
+            AppUnlockScreen(context) {
+                AppLockStore.setSessionUnlocked(true)
+                unlocked = true
+            }
         }
     }
 }

@@ -32,6 +32,7 @@ object AppLockStore {
     private const val ITERATIONS = 120_000
     private const val KEY_BITS = 256
     @Volatile private var externalUntil = 0L
+    @Volatile private var sessionUnlocked = false
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -46,6 +47,16 @@ object AppLockStore {
         return type(context) != OFF && !p.getString(KEY_HASH, null).isNullOrBlank()
     }
 
+    /**
+     * Whether the current process already unlocked Ward. This lives in memory only: it survives
+     * activity recreation (and the extra activity a notification tap can create), but not a
+     * process restart, which is the behaviour users expect from an app lock.
+     */
+    fun sessionUnlocked(): Boolean = sessionUnlocked
+    fun setSessionUnlocked(value: Boolean) {
+        sessionUnlocked = value
+    }
+
     fun set(context: Context, type: String, secret: String) {
         require(type in setOf(PIN, PASSWORD, PATTERN)) { "Unknown app lock type" }
         require(secret.isNotBlank()) { "Empty app lock secret" }
@@ -56,10 +67,13 @@ object AppLockStore {
             .putString(KEY_SALT, Base64.getEncoder().encodeToString(salt))
             .putString(KEY_HASH, Base64.getEncoder().encodeToString(hash))
             .apply()
+        sessionUnlocked = true
     }
 
     fun clear(context: Context) {
         prefs(context).edit().clear().apply()
+        sessionUnlocked = false
+        externalUntil = 0L
     }
 
     /** 0 means unlimited: never wipe because of failed attempts. */
