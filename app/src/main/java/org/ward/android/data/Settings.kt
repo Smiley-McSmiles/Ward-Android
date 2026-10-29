@@ -62,6 +62,7 @@ object SettingsSchema {
         // ------------------------------------------------------------- General
         b("general.background", "Run in the background", "Stay connected when Ward is not on screen so messages and calls still arrive", "general", "Background", true),
         b("general.autostart", "Start after restarting the phone", "Reconnect automatically after Android finishes booting", "general", "Background"),
+        b("general.update_check", "Check for updates", "Ask GitHub once a day for a newer Ward release", "general", "Updates", true),
 
         // ---------------------------------------------------------- Appearance
         c("appearance.style", "Theme", "Follow the system, or always use light or dark", "appearance", "Colours", "system",
@@ -195,4 +196,10 @@ class SettingsStore(context: Context) {
     fun setString(key: String, value: String) = set(key, value)
     fun isDark(): Boolean = when (string("appearance.style", "system")) { "dark" -> true; "light" -> false; else -> false }
     fun accent(): String = string("appearance.accent", "system")
+
+    // Not user-facing settings: bookkeeping for the daily GitHub release check.
+    fun lastUpdateCheck(): Long = prefs.getLong("updates.last_check", 0L)
+    fun setLastUpdateCheck(time: Long) { prefs.edit().putLong("updates.last_check", time).apply() }
+    fun skippedUpdateVersion(): String = prefs.getString("updates.skipped", "").orEmpty()
+    fun skipUpdateVersion(version: String) { prefs.edit().putString("updates.skipped", version).apply() }
 }
