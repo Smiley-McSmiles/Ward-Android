@@ -1661,8 +1661,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 val conn = connection ?: throw IllegalStateException("Not connected")
                 val enc = core.effectiveEncryption(chat, account) != "off"
                 // In an encrypted chat the aesgcm link travels inside the OMEMO payload, never in
-                // SFS/OOB metadata. Unencrypted chats keep the normal file-sharing extension.
-                val sendEntity = if (enc) entity.copy(body = "$name\n$url", attachmentsJson = "[]") else
+                // SFS/OOB metadata. The body must be the bare link: Gajim and other clients only
+                // treat a message as an encrypted file when nothing else is in the body.
+                val sendEntity = if (enc) entity.copy(body = url, attachmentsJson = "[]") else
                     entity.copy(body = name, attachmentsJson = gson.toJson(listOf(mapOf("url" to url,
                         "name" to name, "mime" to mime, "size" to size, "encrypted" to encryptedFile))))
                 val sent = if (enc) tryEncrypt(chat, sendEntity) else null
