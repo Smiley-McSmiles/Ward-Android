@@ -166,9 +166,11 @@ fun ChatScreen(vm: AppViewModel) {
     var passwordOpen by remember { mutableStateOf(false) }
     var text by remember(c.id) { mutableStateOf(c.draft) }
     var initialized by remember(c.id) { mutableStateOf(false) }
+    // Picked files wait here until the send button, like the attachment tray in Google Messages.
+    var pending by remember(c.id) { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         AppLockStore.endExternalActivity()
-        if (uris.isNotEmpty()) vm.sendFiles(uris)
+        if (uris.isNotEmpty()) pending = pending + uris.mapNotNull { pendingAttachment(context, it) }
     }
     var attachMenu by remember { mutableStateOf(false) }
     var gifPicker by remember { mutableStateOf(false) }
@@ -178,20 +180,23 @@ fun ChatScreen(vm: AppViewModel) {
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingCameraFile by remember { mutableStateOf<File?>(null) }
 
-    fun handleCameraResult(ok: Boolean) {
+    fun handleCameraResult(ok: Boolean, video: Boolean) {
         AppLockStore.endExternalActivity()
         val uri = pendingCameraUri
         val file = pendingCameraFile
         pendingCameraUri = null
         pendingCameraFile = null
-        if (ok && uri != null) vm.sendFiles(listOf(uri)) else file?.delete()
+        if (ok && uri != null) {
+            pending = pending + PendingAttachment(uri, file?.name ?: "camera", if (video) "video/mp4" else "image/jpeg",
+                file?.length() ?: 0)
+        } else file?.delete()
     }
 
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        handleCameraResult(ok)
+        handleCameraResult(ok, video = false)
     }
     val captureVideo = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
-        handleCameraResult(ok)
+        handleCameraResult(ok, video = true)
     }
 
     fun launchCamera(video: Boolean) {
@@ -539,10 +544,21 @@ fun ChatScreen(vm: AppViewModel) {
                 onCancelReply = { replyTo = null; editing = null; text = c.draft },
                 onSend = {
                     if (currentVoice().open) cancelVoice()
-                    if (editing != null) { vm.edit(editing!!, text); editing = null }
-                    else vm.send(text, replyTo)
+                    val sending = pending
+                    when {
+                        editing != null -> { vm.edit(editing!!, text); editing = null }
+                        sending.isNotEmpty() -> {
+                            pending = emptyList()
+                            // Caption first, then the files, so the order survives the upload.
+                            if (text.isNotBlank()) vm.send(text, replyTo)
+                            vm.sendFiles(sending.map { it.uri })
+                        }
+                        else -> vm.send(text, replyTo)
+                    }
                     replyTo = null; text = ""
                 },
+                pending = pending,
+                onRemovePending = { pending = pending - it },
                 onAttach = {
                     if (currentVoice().open) cancelVoice()
                     attachMenu = true
@@ -1004,15 +1020,18 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
              onCancelReply: () -> Unit, onSend: () -> Unit, onAttach: () -> Unit,
              onEmoji: () -> Unit = {},
              sendWithEnter: Boolean = true,
+             pending: List<PendingAttachment> = emptyList(),
+             onRemovePending: (PendingAttachment) -> Unit = {},
              voiceState: State<VoiceUiState>,
              onVoiceClick: () -> Unit = {},
              onVoiceAction: (VoiceAction) -> Unit = {},
              onHeightChanged: (Int) -> Unit = {}) {
     val voice by voiceState
+    val hasContent = text.isNotBlank() || pending.isNotEmpty()
     val enterModifier = if (sendWithEnter) {
         Modifier.onPreviewKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && !event.isShiftPressed) {
-                if (text.isNotBlank()) onSend()
+                if (hasContent) onSend()
                 true
             } else false
         }
@@ -1034,6 +1053,17 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                             overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onCancelReply) { Icon(Icons.Filled.Close, "Cancel") }
+                }
+            }
+            // Picked files sit just above the pill, still part of the composer.
+            AnimatedVisibility(visible = pending.isNotEmpty(),
+                enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pending.forEach { item ->
+                        PendingAttachmentTile(item, onRemove = { onRemovePending(item) })
+                    }
                 }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1075,20 +1105,19 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                val hasText = text.isNotBlank()
                 val actionContainer by animateColorAsState(
-                    targetValue = if (hasText) MaterialTheme.colorScheme.primary
+                    targetValue = if (hasContent) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.primaryContainer,
                     animationSpec = tween(180), label = "composerActionContainer")
                 val actionContent by animateColorAsState(
-                    targetValue = if (hasText) MaterialTheme.colorScheme.onPrimary
+                    targetValue = if (hasContent) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onPrimaryContainer,
                     animationSpec = tween(180), label = "composerActionContent")
-                FilledIconButton(onClick = { if (hasText) onSend() else onVoiceClick() },
+                FilledIconButton(onClick = { if (hasContent) onSend() else onVoiceClick() },
                     modifier = Modifier.size(52.dp), shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = actionContainer, contentColor = actionContent)) {
-                    AnimatedContent(targetState = hasText,
+                    AnimatedContent(targetState = hasContent,
                         transitionSpec = {
                             (fadeIn(tween(130)) + scaleIn(initialScale = 0.72f,
                                 animationSpec = tween(180))) togetherWith
@@ -1111,6 +1140,33 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
 private fun formatVoiceTime(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)
     return "%02d:%02d".format(total / 60, total % 60)
+}
+
+/** One picked file in the composer tray: a rounded thumbnail with its own remove button. */
+@Composable
+private fun PendingAttachmentTile(item: PendingAttachment, onRemove: () -> Unit) {
+    Box(Modifier.size(92.dp)) {
+        Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.matchParentSize()) {
+            when {
+                item.isImage -> AsyncImage(model = item.uri, contentDescription = item.name,
+                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else -> Column(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(if (item.isVideo) Icons.Filled.Videocam else Icons.Filled.InsertDriveFile, null,
+                        Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(6.dp))
+                    Text(item.name, fontSize = 9.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Surface(shape = CircleShape, color = Color.Black.copy(alpha = 0.55f),
+            modifier = Modifier.align(Alignment.TopEnd).padding(5.dp).size(24.dp)
+                .clickable(onClick = onRemove)) {
+            Icon(Icons.Filled.Close, "Remove ${item.name}", Modifier.padding(5.dp), tint = Color.White)
+        }
+    }
 }
 
 @Composable
