@@ -16,13 +16,20 @@ import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -81,6 +88,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -660,7 +669,7 @@ fun ChatScreen(vm: AppViewModel) {
                                 onReply = { replyTo = m; editing = null }, onReact = { vm.react(m, it) })
                         }
                         item(key = "composer-space") {
-                            Spacer(Modifier.height(composerHeight + 12.dp))
+                            Spacer(Modifier.height(composerHeight + 22.dp))
                         }
                     }
                 }
@@ -1040,7 +1049,7 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                         BasicTextField(
                             value = text,
                             onValueChange = onText,
-                            modifier = Modifier.weight(1f).padding(vertical = 17.dp)
+                            modifier = Modifier.weight(1f).padding(vertical = 22.dp)
                                 .onFocusChanged { if (it.isFocused && voice.open) onVoiceAction(VoiceAction.Cancel) }
                                 .then(enterModifier),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -1062,23 +1071,33 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                             Icon(Icons.Outlined.EmojiEmotions, "Insert emoji",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (text.isNotBlank()) {
-                            FilledIconButton(onClick = onSend, enabled = !voice.open,
-                                modifier = Modifier.size(38.dp), shape = CircleShape) {
-                                Icon(Icons.Filled.Send, "Send", Modifier.size(18.dp))
-                            }
-                        }
+
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                FilledIconButton(onClick = onVoiceClick, modifier = Modifier.size(52.dp), shape = CircleShape,
+                val hasText = text.isNotBlank()
+                val actionContainer by animateColorAsState(
+                    targetValue = if (hasText) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.primaryContainer,
+                    animationSpec = tween(180), label = "composerActionContainer")
+                val actionContent by animateColorAsState(
+                    targetValue = if (hasText) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onPrimaryContainer,
+                    animationSpec = tween(180), label = "composerActionContent")
+                FilledIconButton(onClick = { if (hasText) onSend() else onVoiceClick() },
+                    modifier = Modifier.size(52.dp), shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (voice.open) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = if (voice.open) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onPrimaryContainer)) {
-                    Icon(Icons.Filled.GraphicEq,
-                        if (voice.open) "Close voice recorder" else "Record a voice message")
+                        containerColor = actionContainer, contentColor = actionContent)) {
+                    AnimatedContent(targetState = hasText,
+                        transitionSpec = {
+                            (fadeIn(tween(130)) + scaleIn(initialScale = 0.72f,
+                                animationSpec = tween(180))) togetherWith
+                                (fadeOut(tween(90)) + scaleOut(targetScale = 0.72f,
+                                    animationSpec = tween(130)))
+                        }, label = "composerAction") { sending ->
+                        if (sending) Icon(Icons.Filled.Send, "Send")
+                        else Icon(Icons.Filled.GraphicEq, "Record a voice message")
+                    }
                 }
             }
             AnimatedVisibility(visible = voice.open,
@@ -1533,14 +1552,14 @@ private suspend fun shareLocation(vm: AppViewModel, chat: ChatEntity, context: C
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TenorGifSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
     var gifs by remember { mutableStateOf<List<String>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
-    LaunchedEffect(query) {
+    var searchNonce by remember { mutableIntStateOf(0) }
+    LaunchedEffect(query, searchNonce) {
         loading = true
         error = ""
         delay(350)
@@ -1549,38 +1568,51 @@ private fun TenorGifSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
         loading = false
         if (result.isEmpty()) error = "No GIFs found. Check your connection and try again."
     }
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
-        dragHandle = { BottomSheetDefaults.DragHandle() }) {
-        Column(Modifier.fillMaxWidth().height(520.dp).padding(horizontal = 16.dp)) {
-            Text("GIFs from Tenor", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(query, { query = it }, singleLine = true,
-                placeholder = { Text("Search Tenor") },
-                leadingIcon = { Icon(Icons.Filled.Search, null) },
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp))
-            Spacer(Modifier.height(10.dp))
-            when {
-                loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().padding(horizontal = 16.dp)) {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("GIFs from Tenor", style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, "Close") }
                 }
-                error.isNotBlank() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(error, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-                }
-                else -> LazyVerticalGrid(columns = GridCells.Fixed(3),
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(gifs.size) { index ->
-                        AsyncImage(model = gifs[index], contentDescription = "GIF",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.aspectRatio(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { onPick(gifs[index]) })
+                OutlinedTextField(query, { query = it }, singleLine = true,
+                    placeholder = { Text("Search Tenor") },
+                    leadingIcon = { Icon(Icons.Filled.Search, null) },
+                    trailingIcon = {
+                        IconButton(onClick = { searchNonce++ }) {
+                            Icon(Icons.Filled.Search, "Search Tenor")
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { searchNonce++ }),
+                    modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp))
+                Spacer(Modifier.height(10.dp))
+                when {
+                    loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    error.isNotBlank() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(error, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                    }
+                    else -> LazyVerticalGrid(columns = GridCells.Fixed(3),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        items(gifs.size) { index ->
+                            AsyncImage(model = gifs[index], contentDescription = "GIF",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.aspectRatio(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onPick(gifs[index]) })
+                        }
                     }
                 }
+                Text("Powered by Tenor", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp))
             }
         }
     }
@@ -1593,7 +1625,10 @@ private suspend fun searchTenor(query: String): List<String> = withContext(Dispa
     try {
         connection.connectTimeout = 12_000
         connection.readTimeout = 12_000
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) Ward")
+        connection.setRequestProperty("User-Agent",
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
+        connection.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
         val html = connection.inputStream.bufferedReader().use { it.readText() }
         Regex("""https://media\.tenor\.com/[^"']+\.gif""")
             .findAll(html)
@@ -1613,7 +1648,9 @@ private suspend fun sendTenorGif(vm: AppViewModel, context: Context, url: String
             val connection = URL(url).openConnection() as HttpURLConnection
             connection.connectTimeout = 15_000
             connection.readTimeout = 15_000
-            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) Ward")
+            connection.setRequestProperty("User-Agent",
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
             connection.inputStream.use { input ->
                 file.outputStream().use { input.copyTo(it) }
             }
@@ -1741,55 +1778,66 @@ private fun EmojiPickerDialog(vm: AppViewModel, title: String = "Choose a reacti
         "\uD83C\uDFFF" to "\u270B\uD83C\uDFFF"
     )
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
-        dragHandle = { BottomSheetDefaults.DragHandle() }) {
-        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 20.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                Text("Skin tone", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(6.dp))
-                Box {
-                    TextButton(onClick = { toneMenu = true }) {
-                        Text(tones.firstOrNull { it.first == tone }?.second ?: "\u270B", fontSize = 22.sp)
-                        Icon(Icons.Filled.ArrowDropDown, "Choose skin tone")
-                    }
-                    DropdownMenu(expanded = toneMenu, onDismissRequest = { toneMenu = false }) {
-                        for ((value, label) in tones) {
-                            DropdownMenuItem(
-                                text = { Text(label, fontSize = 24.sp) },
-                                trailingIcon = {
-                                    if (tone == value) Icon(Icons.Filled.Check, "Selected")
-                                },
-                                onClick = {
-                                    tone = value
-                                    vm.settings.set("chats.reaction_skin_tone", value)
-                                    toneMenu = false
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            AnimatedVisibility(visible = visible,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
+                Surface(Modifier.fillMaxWidth().fillMaxHeight(0.78f).navigationBarsPadding(),
+                    shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
+                    Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                            Text("Skin tone", style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(6.dp))
+                            Box {
+                                TextButton(onClick = { toneMenu = true }) {
+                                    Text(tones.firstOrNull { it.first == tone }?.second ?: "\u270B", fontSize = 22.sp)
+                                    Icon(Icons.Filled.ArrowDropDown, "Choose skin tone")
                                 }
-                            )
+                                DropdownMenu(expanded = toneMenu, onDismissRequest = { toneMenu = false }) {
+                                    for ((value, label) in tones) {
+                                        DropdownMenuItem(
+                                            text = { Text(label, fontSize = 24.sp) },
+                                            trailingIcon = {
+                                                if (tone == value) Icon(Icons.Filled.Check, "Selected")
+                                            },
+                                            onClick = {
+                                                tone = value
+                                                vm.settings.set("chats.reaction_skin_tone", value)
+                                                toneMenu = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        AndroidView(
+                            factory = { ctx ->
+                                val themed = android.view.ContextThemeWrapper(ctx,
+                                    if (dark) android.R.style.Theme_Material_NoActionBar
+                                    else android.R.style.Theme_Material_Light_NoActionBar)
+                                androidx.emoji2.emojipicker.EmojiPickerView(themed).apply {
+                                    emojiGridColumns = 8
+                                    setOnEmojiPickedListener { item ->
+                                        onPick(applySkinTone(item.emoji, tone))
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().weight(1f)
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = onDismiss) { Text("Cancel") }
                         }
                     }
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            AndroidView(
-                factory = { ctx ->
-                    val themed = android.view.ContextThemeWrapper(ctx,
-                        if (dark) android.R.style.Theme_Material_NoActionBar
-                        else android.R.style.Theme_Material_Light_NoActionBar)
-                    androidx.emoji2.emojipicker.EmojiPickerView(themed).apply {
-                        emojiGridColumns = 8
-                        setOnEmojiPickedListener { item ->
-                            onPick(applySkinTone(item.emoji, tone))
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(360.dp)
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         }
     }
