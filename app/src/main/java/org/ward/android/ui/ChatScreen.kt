@@ -30,8 +30,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +40,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -54,10 +57,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -76,8 +81,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -105,12 +108,13 @@ import org.ward.android.util.Colors
 import org.ward.android.util.TimeUtil
 import org.ward.android.xmpp.OccupantInfo
 import java.io.File
-import java.util.Calendar
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 import java.util.UUID
 import kotlin.coroutines.resume
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(vm: AppViewModel) {
     val chat by vm.selectedChatEntity.collectAsState()
@@ -158,12 +162,12 @@ fun ChatScreen(vm: AppViewModel) {
         if (uris.isNotEmpty()) vm.sendFiles(uris)
     }
     var attachMenu by remember { mutableStateOf(false) }
+    var gifPicker by remember { mutableStateOf(false) }
     var cameraChoice by remember { mutableStateOf(false) }
     var contactPicker by remember { mutableStateOf(false) }
     var scheduleDialog by remember { mutableStateOf(false) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingCameraFile by remember { mutableStateOf<File?>(null) }
-    var pendingLocationLive by remember { mutableStateOf<Boolean?>(null) }
 
     fun handleCameraResult(ok: Boolean) {
         AppLockStore.endExternalActivity()
@@ -208,27 +212,22 @@ fun ChatScreen(vm: AppViewModel) {
 
     val locationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        val live = pendingLocationLive
-        pendingLocationLive = null
-        if (live != null) {
-            if (granted.values.any { it }) {
-                vm.core.scope.launch { shareLocation(vm, c, context, live) }
-            } else {
-                android.widget.Toast.makeText(context, "Location permission is required",
-                    android.widget.Toast.LENGTH_SHORT).show()
-            }
+        if (granted.values.any { it }) {
+            vm.core.scope.launch { shareLocation(vm, c, context) }
+        } else {
+            android.widget.Toast.makeText(context, "Location permission is required",
+                android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
-    fun requestLocation(live: Boolean) {
+    fun requestLocation() {
         val fine = androidx.core.content.ContextCompat.checkSelfPermission(context,
             Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
         val coarse = androidx.core.content.ContextCompat.checkSelfPermission(context,
             Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (fine || coarse) {
-            vm.core.scope.launch { shareLocation(vm, c, context, live) }
+            vm.core.scope.launch { shareLocation(vm, c, context) }
         } else {
-            pendingLocationLive = live
             locationPermission.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION))
@@ -445,6 +444,15 @@ fun ChatScreen(vm: AppViewModel) {
     LaunchedEffect(composerHeightPx) {
         if (messages.isNotEmpty() && search.isBlank()) listState.scrollToItem(messages.size)
     }
+    // When the keyboard opens, the composer moves up but the list keeps its scroll position.
+    // Scroll to the spacer again so the newest message stays above the keyboard/composer.
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(imeVisible) {
+        if (imeVisible && messages.isNotEmpty() && search.isBlank()) {
+            delay(250)
+            listState.animateScrollToItem(messages.size)
+        }
+    }
     Scaffold(
         modifier = Modifier.fillMaxSize().imePadding()
             .offset { IntOffset(swipeOffset.roundToInt(), 0) },
@@ -530,10 +538,6 @@ fun ChatScreen(vm: AppViewModel) {
                     if (currentVoice().open) cancelVoice()
                     attachMenu = true
                 },
-                onCamera = {
-                    if (currentVoice().open) cancelVoice()
-                    cameraChoice = true
-                },
                 onEmoji = {
                     if (currentVoice().open) cancelVoice()
                     composerEmoji = true
@@ -601,7 +605,9 @@ fun ChatScreen(vm: AppViewModel) {
                 Modifier.weight(1f).fillMaxWidth()
                     .pointerInput(maxSwipe) {
                         awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = true)
+                            // Start even when a bubble's clickable has seen the down, so a
+                            // left-to-right swipe anywhere in the conversation goes back.
+                            val down = awaitFirstDown(requireUnconsumed = false)
                             var dragging = false
                             var totalX = 0f
                             var totalY = 0f
@@ -654,10 +660,18 @@ fun ChatScreen(vm: AppViewModel) {
                                 onReply = { replyTo = m; editing = null }, onReact = { vm.react(m, it) })
                         }
                         item(key = "composer-space") {
-                            Spacer(Modifier.height(composerHeight))
+                            Spacer(Modifier.height(composerHeight + 12.dp))
                         }
                     }
                 }
+                // Softly fade the conversation into the floating composer without drawing a
+                // hard panel behind it.
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .height(composerHeight + 56.dp)
+                    .background(Brush.verticalGradient(listOf(
+                        Color.Transparent,
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                        MaterialTheme.colorScheme.background))))
             }
         }
     }
@@ -687,23 +701,13 @@ fun ChatScreen(vm: AppViewModel) {
     if (attachMenu) {
         AttachmentMenu(
             onDismiss = { attachMenu = false },
-            onGallery = {
-                attachMenu = false
-                AppLockStore.beginExternalActivity()
-                attach.launch(arrayOf("image/*"))
-            },
             onCamera = { attachMenu = false; cameraChoice = true },
-            onGifs = {
-                attachMenu = false
-                AppLockStore.beginExternalActivity()
-                attach.launch(arrayOf("image/gif"))
-            },
+            onGifs = { attachMenu = false; gifPicker = true },
             onFiles = {
                 attachMenu = false
                 AppLockStore.beginExternalActivity()
                 attach.launch(arrayOf("*/*"))
             },
-            onLiveLocation = { attachMenu = false; requestLocation(true) },
             onContacts = { attachMenu = false; contactPicker = true },
             onSchedule = {
                 attachMenu = false
@@ -712,7 +716,16 @@ fun ChatScreen(vm: AppViewModel) {
                         android.widget.Toast.LENGTH_SHORT).show()
                 } else scheduleDialog = true
             },
-            onOneTimeLocation = { attachMenu = false; requestLocation(false) }
+            onOneTimeLocation = { attachMenu = false; requestLocation() }
+        )
+    }
+    if (gifPicker) {
+        TenorGifSheet(
+            onDismiss = { gifPicker = false },
+            onPick = { url ->
+                gifPicker = false
+                vm.core.scope.launch { sendTenorGif(vm, context, url) }
+            }
         )
     }
     if (cameraChoice) {
@@ -733,7 +746,7 @@ fun ChatScreen(vm: AppViewModel) {
         )
     }
     if (scheduleDialog) {
-        ScheduleSendDialog(
+        ScheduleSendSheet(
             onDismiss = { scheduleDialog = false },
             onSchedule = { at, label ->
                 if (text.isNotBlank()) {
@@ -840,17 +853,35 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
             val swipeModifier = if (m.retracted == 0) Modifier
                 .offset { IntOffset(swipeX.roundToInt(), 0) }
                 .pointerInput(m.id) {
-                    detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, amount ->
-                            change.consume()
-                            swipeX = (swipeX + amount).coerceIn(0f, maxSwipe)
-                        },
-                        onDragEnd = {
-                            if (swipeX >= replyThreshold) onReply()
-                            swipeX = 0f
-                        },
-                        onDragCancel = { swipeX = 0f }
-                    )
+                    // Reply is a right-to-left swipe on the bubble. A left-to-right swipe must be
+                    // left unconsumed so the parent chat gesture can take over and go back.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var totalX = 0f
+                        var totalY = 0f
+                        var replying = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            val delta = change.positionChange()
+                            totalX += delta.x
+                            totalY += delta.y
+                            if (!replying) {
+                                if (abs(totalY) > viewConfiguration.touchSlop &&
+                                    abs(totalY) > abs(totalX)) break
+                                if (abs(totalX) <= viewConfiguration.touchSlop) continue
+                                if (totalX > 0) break // let the parent handle swipe-back
+                                replying = true
+                            }
+                            if (replying) {
+                                change.consume()
+                                swipeX = (swipeX + delta.x).coerceIn(-maxSwipe, 0f)
+                            }
+                        }
+                        if (replying && swipeX <= -replyThreshold) onReply()
+                        swipeX = 0f
+                    }
                 } else Modifier
             Surface(color = color, shape = shape,
                 tonalElevation = 0.dp,
@@ -962,7 +993,7 @@ data class VoiceUiState(
 @Composable
 fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: MessageEntity?, editing: MessageEntity?,
              onCancelReply: () -> Unit, onSend: () -> Unit, onAttach: () -> Unit,
-             onCamera: () -> Unit = {}, onEmoji: () -> Unit = {},
+             onEmoji: () -> Unit = {},
              sendWithEnter: Boolean = true,
              voiceState: State<VoiceUiState>,
              onVoiceClick: () -> Unit = {},
@@ -1009,7 +1040,7 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                         BasicTextField(
                             value = text,
                             onValueChange = onText,
-                            modifier = Modifier.weight(1f).padding(vertical = 14.dp)
+                            modifier = Modifier.weight(1f).padding(vertical = 17.dp)
                                 .onFocusChanged { if (it.isFocused && voice.open) onVoiceAction(VoiceAction.Cancel) }
                                 .then(enterModifier),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -1031,12 +1062,7 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
                             Icon(Icons.Outlined.EmojiEmotions, "Insert emoji",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (text.isBlank()) {
-                            IconButton(onClick = onCamera, enabled = !voice.open) {
-                                Icon(Icons.Outlined.Image, "Open camera",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        } else {
+                        if (text.isNotBlank()) {
                             FilledIconButton(onClick = onSend, enabled = !voice.open,
                                 modifier = Modifier.size(38.dp), shape = CircleShape) {
                                 Icon(Icons.Filled.Send, "Send", Modifier.size(18.dp))
@@ -1280,11 +1306,9 @@ private fun VoiceRoundButton(icon: androidx.compose.ui.graphics.vector.ImageVect
 @Composable
 private fun AttachmentMenu(
     onDismiss: () -> Unit,
-    onGallery: () -> Unit,
     onCamera: () -> Unit,
     onGifs: () -> Unit,
     onFiles: () -> Unit,
-    onLiveLocation: () -> Unit,
     onContacts: () -> Unit,
     onSchedule: () -> Unit,
     onOneTimeLocation: () -> Unit
@@ -1295,14 +1319,12 @@ private fun AttachmentMenu(
         dragHandle = { BottomSheetDefaults.DragHandle() }) {
         Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 30.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AttachmentTile("Gallery", Icons.Outlined.PhotoLibrary, onGallery, Modifier.weight(1f))
                 AttachmentTile("Camera", Icons.Outlined.PhotoCamera, onCamera, Modifier.weight(1f))
                 AttachmentTile("GIFs", Icons.Filled.Gif, onGifs, Modifier.weight(1f))
                 AttachmentTile("Files", Icons.Outlined.AttachFile, onFiles, Modifier.weight(1f))
             }
             Spacer(Modifier.height(20.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AttachmentTile("Real-time\nLocation", Icons.Outlined.MyLocation, onLiveLocation, Modifier.weight(1f))
                 AttachmentTile("Contacts", Icons.Outlined.Person, onContacts, Modifier.weight(1f))
                 AttachmentTile("Schedule\nSend", Icons.Outlined.Schedule, onSchedule, Modifier.weight(1f))
                 AttachmentTile("One-time\nLocation", Icons.Outlined.LocationOn, onOneTimeLocation, Modifier.weight(1f))
@@ -1364,41 +1386,92 @@ private fun ContactShareDialog(contacts: List<ContactEntity>, onDismiss: () -> U
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ScheduleSendDialog(onDismiss: () -> Unit, onSchedule: (Long, String) -> Unit) {
-    val now = System.currentTimeMillis()
-    fun tomorrowMorning(): Long = Calendar.getInstance().apply {
-        add(Calendar.DAY_OF_YEAR, 1)
-        set(Calendar.HOUR_OF_DAY, 9)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Schedule send") },
-        text = {
-            Column {
-                Text("Ward will send this message later, as long as the account can reconnect at that time.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                listOf(15L to "In 15 minutes", 60L to "In 1 hour", 180L to "In 3 hours").forEach { (minutes, label) ->
-                    TextButton(onClick = { onSchedule(now + minutes * 60_000L, label.lowercase()) }) {
-                        Text(label)
-                    }
-                }
-                TextButton(onClick = { onSchedule(tomorrowMorning(), "tomorrow at 9:00") }) {
-                    Text("Tomorrow at 9:00")
-                }
+private fun ScheduleSendSheet(onDismiss: () -> Unit, onSchedule: (Long, String) -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var days by remember { mutableIntStateOf(0) }
+    var hours by remember { mutableIntStateOf(0) }
+    var minutes by remember { mutableIntStateOf(15) }
+    val totalMinutes = days * 24 * 60 + hours * 60 + minutes
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+        dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
+            Text("Schedule send", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(4.dp))
+            Text("Choose how long from now. Ward sends it when the account can reconnect.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                WheelPicker((0..7).toList(), 0, "Days", Modifier.weight(1f)) { days = it }
+                WheelPicker((0..23).toList(), 0, "Hours", Modifier.weight(1f)) { hours = it }
+                WheelPicker((0..59).toList(), 15, "Minutes", Modifier.weight(1f)) { minutes = it }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = {
+                val label = scheduleLabel(days, hours, minutes)
+                onSchedule(System.currentTimeMillis() + totalMinutes * 60_000L, label)
+            }, enabled = totalMinutes > 0, modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(26.dp)) {
+                Text("Schedule")
+            }
+        }
+    }
 }
 
-private fun locationText(location: Location, live: Boolean): String {
+@Composable
+private fun WheelPicker(values: List<Int>, initial: Int, label: String,
+                        modifier: Modifier = Modifier, onSelected: (Int) -> Unit) {
+    val itemHeight = 44.dp
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = initial)
+    val fling = rememberSnapFlingBehavior(lazyListState = state)
+    val selected by remember {
+        derivedStateOf {
+            val info = state.layoutInfo
+            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+            info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2f - center) }?.index ?: initial
+        }
+    }
+    LaunchedEffect(selected) {
+        values.getOrNull(selected)?.let(onSelected)
+    }
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        Box(Modifier.fillMaxWidth().height(itemHeight * 3), contentAlignment = Alignment.Center) {
+            Surface(Modifier.fillMaxWidth().height(itemHeight).padding(horizontal = 2.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest) {}
+            LazyColumn(state = state, flingBehavior = fling,
+                contentPadding = PaddingValues(vertical = itemHeight),
+                modifier = Modifier.fillMaxSize()) {
+                items(values.size) { index ->
+                    Box(Modifier.fillMaxWidth().height(itemHeight), contentAlignment = Alignment.Center) {
+                        Text(values[index].toString().padStart(2, '0'),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun scheduleLabel(days: Int, hours: Int, minutes: Int): String {
+    val parts = mutableListOf<String>()
+    if (days > 0) parts += "$days day${if (days == 1) "" else "s"}"
+    if (hours > 0) parts += "$hours hour${if (hours == 1) "" else "s"}"
+    if (minutes > 0) parts += "$minutes minute${if (minutes == 1) "" else "s"}"
+    return parts.joinToString(", ").ifBlank { "now" }
+}
+
+private fun locationText(location: Location): String {
     val lat = String.format(Locale.US, "%.6f", location.latitude)
     val lon = String.format(Locale.US, "%.6f", location.longitude)
-    val label = if (live) "Live location" else "One-time location"
-    return "$label: https://www.openstreetmap.org/?mlat=$lat&mlon=$lon#map=16/$lat/$lon"
+    return "One-time location: https://www.openstreetmap.org/?mlat=$lat&mlon=$lon#map=16/$lat/$lon"
 }
 
 private suspend fun readLocation(context: Context): Location? = withContext(Dispatchers.Main) {
@@ -1444,7 +1517,7 @@ private suspend fun readLocation(context: Context): Location? = withContext(Disp
     fresh ?: last
 }
 
-private suspend fun shareLocation(vm: AppViewModel, chat: ChatEntity, context: Context, live: Boolean) {
+private suspend fun shareLocation(vm: AppViewModel, chat: ChatEntity, context: Context) {
     val location = readLocation(context)
     if (location == null) {
         withContext(Dispatchers.Main) {
@@ -1453,20 +1526,108 @@ private suspend fun shareLocation(vm: AppViewModel, chat: ChatEntity, context: C
         }
         return
     }
-    val stored = vm.core.sendText(chat, locationText(location, live), null)
+    vm.core.sendText(chat, locationText(location), null)
     withContext(Dispatchers.Main) {
-        android.widget.Toast.makeText(context,
-            if (live) "Sharing live location for 15 minutes" else "Location shared",
+        android.widget.Toast.makeText(context, "Location shared",
             android.widget.Toast.LENGTH_SHORT).show()
     }
-    if (!live) return
-    val end = System.currentTimeMillis() + 15 * 60_000L
-    while (System.currentTimeMillis() < end) {
-        delay(60_000L)
-        val next = readLocation(context) ?: continue
-        val currentChat = vm.core.dao.chat(chat.id) ?: break
-        val currentMessage = vm.core.dao.message(stored.id) ?: break
-        vm.core.edit(currentChat, currentMessage, locationText(next, true))
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TenorGifSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var gifs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
+    LaunchedEffect(query) {
+        loading = true
+        error = ""
+        delay(350)
+        val result = runCatching { searchTenor(query) }.getOrElse { emptyList() }
+        gifs = result
+        loading = false
+        if (result.isEmpty()) error = "No GIFs found. Check your connection and try again."
+    }
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+        dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().height(520.dp).padding(horizontal = 16.dp)) {
+            Text("GIFs from Tenor", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(query, { query = it }, singleLine = true,
+                placeholder = { Text("Search Tenor") },
+                leadingIcon = { Icon(Icons.Filled.Search, null) },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp))
+            Spacer(Modifier.height(10.dp))
+            when {
+                loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                error.isNotBlank() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(error, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                }
+                else -> LazyVerticalGrid(columns = GridCells.Fixed(3),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(gifs.size) { index ->
+                        AsyncImage(model = gifs[index], contentDescription = "GIF",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.aspectRatio(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onPick(gifs[index]) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+private suspend fun searchTenor(query: String): List<String> = withContext(Dispatchers.IO) {
+    val slug = query.trim().lowercase(Locale.ROOT)
+        .replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "trending" }
+    val connection = URL("https://tenor.com/search/$slug-gifs").openConnection() as HttpURLConnection
+    try {
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 12_000
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) Ward")
+        val html = connection.inputStream.bufferedReader().use { it.readText() }
+        Regex("""https://media\.tenor\.com/[^"']+\.gif""")
+            .findAll(html)
+            .map { it.value.replace("&amp;", "&") }
+            .distinct()
+            .take(30)
+            .toList()
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private suspend fun sendTenorGif(vm: AppViewModel, context: Context, url: String) {
+    val file = File(context.cacheDir, "tenor-${System.currentTimeMillis()}.gif")
+    val ok = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 15_000
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) Ward")
+            connection.inputStream.use { input ->
+                file.outputStream().use { input.copyTo(it) }
+            }
+            connection.disconnect()
+        }.isSuccess && file.length() > 0L
+    }
+    if (ok) {
+        vm.sendFile(Uri.fromFile(file))
+    } else {
+        file.delete()
+        withContext(Dispatchers.Main) {
+            android.widget.Toast.makeText(context, "Could not download that GIF",
+                android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 }
 
@@ -1568,6 +1729,7 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EmojiPickerDialog(vm: AppViewModel, title: String = "Choose a reaction",
                               onDismiss: () -> Unit, onPick: (String) -> Unit) {
@@ -1579,56 +1741,55 @@ private fun EmojiPickerDialog(vm: AppViewModel, title: String = "Choose a reacti
         "\uD83C\uDFFF" to "\u270B\uD83C\uDFFF"
     )
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    Dialog(onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(24.dp),
-            tonalElevation = 6.dp) {
-            Column(Modifier.padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    Text("Skin tone", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(6.dp))
-                    Box {
-                        TextButton(onClick = { toneMenu = true }) {
-                            Text(tones.firstOrNull { it.first == tone }?.second ?: "\u270B", fontSize = 22.sp)
-                            Icon(Icons.Filled.ArrowDropDown, "Choose skin tone")
-                        }
-                        DropdownMenu(expanded = toneMenu, onDismissRequest = { toneMenu = false }) {
-                            for ((value, label) in tones) {
-                                DropdownMenuItem(
-                                    text = { Text(label, fontSize = 24.sp) },
-                                    trailingIcon = {
-                                        if (tone == value) Icon(Icons.Filled.Check, "Selected")
-                                    },
-                                    onClick = {
-                                        tone = value
-                                        vm.settings.set("chats.reaction_skin_tone", value)
-                                        toneMenu = false
-                                    }
-                                )
-                            }
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+        dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 20.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text("Skin tone", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Box {
+                    TextButton(onClick = { toneMenu = true }) {
+                        Text(tones.firstOrNull { it.first == tone }?.second ?: "\u270B", fontSize = 22.sp)
+                        Icon(Icons.Filled.ArrowDropDown, "Choose skin tone")
+                    }
+                    DropdownMenu(expanded = toneMenu, onDismissRequest = { toneMenu = false }) {
+                        for ((value, label) in tones) {
+                            DropdownMenuItem(
+                                text = { Text(label, fontSize = 24.sp) },
+                                trailingIcon = {
+                                    if (tone == value) Icon(Icons.Filled.Check, "Selected")
+                                },
+                                onClick = {
+                                    tone = value
+                                    vm.settings.set("chats.reaction_skin_tone", value)
+                                    toneMenu = false
+                                }
+                            )
                         }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                AndroidView(
-                    factory = { ctx ->
-                        val themed = android.view.ContextThemeWrapper(ctx,
-                            if (dark) android.R.style.Theme_Material_NoActionBar
-                            else android.R.style.Theme_Material_Light_NoActionBar)
-                        androidx.emoji2.emojipicker.EmojiPickerView(themed).apply {
-                            emojiGridColumns = 8
-                            setOnEmojiPickedListener { item ->
-                                onPick(applySkinTone(item.emoji, tone))
-                            }
+            }
+            Spacer(Modifier.height(8.dp))
+            AndroidView(
+                factory = { ctx ->
+                    val themed = android.view.ContextThemeWrapper(ctx,
+                        if (dark) android.R.style.Theme_Material_NoActionBar
+                        else android.R.style.Theme_Material_Light_NoActionBar)
+                    androidx.emoji2.emojipicker.EmojiPickerView(themed).apply {
+                        emojiGridColumns = 8
+                        setOnEmojiPickedListener { item ->
+                            onPick(applySkinTone(item.emoji, tone))
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(360.dp)
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(360.dp)
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         }
     }
