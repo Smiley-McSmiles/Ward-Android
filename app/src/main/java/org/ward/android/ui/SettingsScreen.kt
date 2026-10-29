@@ -55,8 +55,10 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
     val scope = rememberCoroutineScope()
     BackHandler(enabled = onBack != null) { onBack?.invoke() }
     if (page != null) {
-        SettingsPage(vm, page!!, accounts, states, onBack = { page = null }, onNavigate = { page = it },
-            onAddAccount = onAddAccount)
+        SwipeBack(onBack = { page = null }) {
+            SettingsPage(vm, page!!, accounts, states, onBack = { page = null }, onNavigate = { page = it },
+                onAddAccount = onAddAccount)
+        }
         return
     }
     Box(Modifier.fillMaxSize()) {
