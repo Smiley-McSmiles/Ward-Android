@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Smiley-McSmiles/Ward-Android/releases"><img src="https://img.shields.io/badge/version-1.0.5-blue.svg?style=flat-square" alt="Version 1.0.5"></a>
+  <a href="https://github.com/Smiley-McSmiles/Ward-Android/releases"><img src="https://img.shields.io/badge/version-1.0.6-blue.svg?style=flat-square" alt="Version 1.0.6"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.0">
   <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4.svg?style=flat-square" alt="Jetpack Compose and Material 3">

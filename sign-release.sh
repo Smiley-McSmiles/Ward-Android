@@ -4,9 +4,12 @@
 set -eu
 export JAVA_HOME="${JAVA_HOME:-$HOME/jdk21}"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+version="$(sed -n 's/.*versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -n 1)"
+[ -n "$version" ] || { echo "could not read versionName from app/build.gradle.kts" >&2; exit 1; }
+out="app/build/outputs/apk/release/ward-${version}-android.apk"
 ./gradlew :app:assembleRelease
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
   --ks "${HOME}/.android/debug.keystore" --ks-pass pass:android --key-pass pass:android \
-  --out app/build/outputs/apk/release/ward-1.0.4-android.apk \
+  --out "$out" \
   app/build/outputs/apk/release/app-release-unsigned.apk
-echo "app/build/outputs/apk/release/ward-1.0.4-android.apk"
+echo "$out"
