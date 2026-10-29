@@ -243,7 +243,17 @@ fun guessMime(name: String): String {
 fun bodyWithoutAttachmentUrls(body: String, attachments: List<ParsedAttachments>): String {
     if (attachments.isEmpty()) return body
     val aes = attachments.firstOrNull { it.url.startsWith("aesgcm://") }
-    if (aes != null) return body.substringBefore("aesgcm://").trim().ifBlank { aes.name }
+    if (aes != null) {
+        val caption = body.substringBefore("aesgcm://").trim()
+        if (caption.isEmpty()) return ""
+        // Older Ward builds wrote the uploaded file name on its own line above the link. That is
+        // not a caption, so drop it and keep only text the user actually typed.
+        val file = aes.url.substringAfter("aesgcm://").substringBefore('#').substringAfterLast('/')
+        val bare = file.removeSuffix(".enc")
+        return caption.lineSequence()
+            .filterNot { it.trim() == file || it.trim() == bare }
+            .joinToString("\n").trim()
+    }
     var rest = body
     for (a in attachments) if (a.url in rest) rest = rest.replace(a.url, "")
     return rest.trim()

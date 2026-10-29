@@ -290,8 +290,8 @@ class WardCore private constructor(val context: Context) {
         if (message.body.isNotBlank() && message.body !in names) parts.add(message.body)
         for (a in atts) {
             val url = a["url"]?.toString()?.takeIf { it.isNotBlank() } ?: continue
-            val name = a["name"]?.toString().orEmpty()
-            parts.add(if (url.startsWith("aesgcm://") && name.isNotBlank()) "$name\n$url" else url)
+            // An aesgcm link has to stand alone in the body, or other clients print it as text.
+            parts.add(url)
         }
         if (parts.isNotEmpty()) sendText(target, parts.joinToString("\n\n"))
     }

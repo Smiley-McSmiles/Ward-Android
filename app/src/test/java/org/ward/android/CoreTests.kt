@@ -108,6 +108,27 @@ class CoreTests {
         assertEquals("Clip", bodyWithoutAttachmentUrls("Clip\naesgcm://upload.example.org/clip.mp4.enc#abcdef", encrypted))
     }
 
+    @Test fun encryptedFileBodyIsTheBareLink() {
+        val url = "aesgcm://upload.example.org/upload/01a1894e/photo~2.jpg.enc#8124a3e4e50f6c6c3ba870761a3c73"
+        val atts = attachmentsFromBody(url)
+        assertEquals(1, atts.size)
+        assertEquals("image/jpeg", atts[0].mime)
+        assertEquals("", bodyWithoutAttachmentUrls(url, atts))
+
+        // Older Ward builds sent "<name>\n<url>"; the name is not a caption.
+        val legacy = "photo~2.jpg\n$url"
+        val old = attachmentsFromBody(legacy)
+        assertEquals("photo~2.jpg", old[0].name)
+        assertEquals("", bodyWithoutAttachmentUrls(legacy, old))
+
+        // Real text above the link is still a caption.
+        assertEquals("Look", bodyWithoutAttachmentUrls("Look\n$url", attachmentsFromBody("Look\n$url")))
+    }
+
+    @Test fun alwaysRelayCallsIsOnByDefault() {
+        assertEquals(true, SettingsSchema.byKey["calls.relay_only"]?.default)
+    }
+
     @Test fun ordinaryLinksAndAudioFormats() {
         assertTrue(attachmentsFromBody("https://example.org/article").isEmpty())
         assertEquals("audio/mpeg", guessMime("https://example.org/song.mp3"))
