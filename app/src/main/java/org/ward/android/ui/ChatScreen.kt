@@ -463,7 +463,7 @@ fun ChatScreen(vm: AppViewModel) {
         }
     }
     Scaffold(
-        modifier = Modifier.fillMaxSize().imePadding()
+        modifier = Modifier.fillMaxSize()
             .offset { IntOffset(swipeOffset.roundToInt(), 0) },
         topBar = {
             // Scaffold expects a single top-bar composable. Emitting the app bar and the search
@@ -1020,7 +1020,10 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
     // The composer sits directly over the chat background; only the input pill and the open
     // recorder card should be visible, not a full-width panel behind them.
     Surface(color = Color.Transparent, tonalElevation = 0.dp,
-        modifier = Modifier.navigationBarsPadding().onSizeChanged { onHeightChanged(it.height) }) {
+        modifier = Modifier
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)
+                .only(WindowInsetsSides.Bottom))
+            .onSizeChanged { onHeightChanged(it.height) }) {
         Column {
             AnimatedVisibility(visible = replyTo != null || editing != null,
                 enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
