@@ -25,6 +25,7 @@ import org.ward.android.xmpp.attachments
 import org.ward.android.xmpp.attachmentsFromBody
 import org.ward.android.xmpp.bodyWithoutAttachmentUrls
 import org.ward.android.xmpp.guessMime
+import org.ward.android.updates.UpdateCheck
 import java.io.File
 
 class CoreTests {
@@ -106,6 +107,18 @@ class CoreTests {
         assertEquals(1, encrypted.size)
         assertEquals("video/mp4", encrypted[0].mime)
         assertEquals("Clip", bodyWithoutAttachmentUrls("Clip\naesgcm://upload.example.org/clip.mp4.enc#abcdef", encrypted))
+    }
+
+    @Test fun updateCheckerComparesDottedVersions() {
+        assertTrue(UpdateCheck.isNewer("1.0.10", "1.0.9"))
+        assertTrue(UpdateCheck.isNewer("1.1.0", "1.0.99"))
+        assertTrue(UpdateCheck.isNewer("v1.0.5", "1.0.4"))
+        assertFalse(UpdateCheck.isNewer("1.0.5", "1.0.5"))
+        assertFalse(UpdateCheck.isNewer("1.0.4", "1.0.5"))
+    }
+
+    @Test fun updateCheckIsOnByDefault() {
+        assertEquals(true, SettingsSchema.byKey["general.update_check"]?.default)
     }
 
     @Test fun encryptedFileBodyIsTheBareLink() {

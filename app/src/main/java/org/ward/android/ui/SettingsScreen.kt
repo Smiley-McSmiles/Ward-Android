@@ -35,6 +35,8 @@ import kotlinx.coroutines.withContext
 import org.ward.android.BuildConfig
 import org.ward.android.ConnectionState
 import org.ward.android.data.*
+import org.ward.android.updates.UpdateCheck
+import org.ward.android.updates.UpdateInfo
 import org.ward.android.util.SecretStore
 import java.io.File
 
@@ -1046,6 +1048,9 @@ private fun DonationRow(icon: ImageVector, label: String, value: String, iconCol
 @Composable
 fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
     val context = LocalContext.current
+    var checking by remember { mutableStateOf(false) }
+    var found by remember { mutableStateOf<UpdateInfo?>(null) }
+    val scope = rememberCoroutineScope()
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(title = { Text("About Ward", style = MaterialTheme.typography.headlineSmall) }, navigationIcon = {
             WardBackButton(onBack)
@@ -1075,6 +1080,25 @@ fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
                     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Smiley-McSmiles/Ward-Android"))) }
                 }
                 SettingsDivider()
+                ActionRow(Icons.Filled.SystemUpdate, "Check for updates",
+                    if (checking) "Checking GitHub…" else "Ward ${BuildConfig.VERSION_NAME} is installed",
+                    iconColor = WardIconColors.green, showChevron = false) {
+                    if (!checking) {
+                        checking = true
+                        scope.launch {
+                            val info = withContext(Dispatchers.IO) { UpdateCheck.latest() }
+                            checking = false
+                            when {
+                                info == null -> android.widget.Toast.makeText(context,
+                                    "Could not reach GitHub", android.widget.Toast.LENGTH_SHORT).show()
+                                UpdateCheck.isNewer(info.version, BuildConfig.VERSION_NAME) -> found = info
+                                else -> android.widget.Toast.makeText(context,
+                                    "Ward is up to date", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+                SettingsDivider()
                 ActionRow(Icons.Filled.Favorite, "Donate", "Support Ward’s development",
                     iconColor = WardIconColors.pink) { onDonate() }
             }
@@ -1084,4 +1108,5 @@ fun AboutPage(onBack: () -> Unit, onDonate: () -> Unit = {}) {
                 modifier = Modifier.padding(horizontal = 28.dp))
         }
     }
+    found?.let { info -> UpdateAvailableDialog(info) { found = null } }
 }

@@ -12,18 +12,31 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
+import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.ward.android.BuildConfig
 import org.ward.android.MainActivity
 import org.ward.android.WardCore
 import org.ward.android.service.WardService
+import org.ward.android.updates.UpdateCheck
+import org.ward.android.updates.UpdateInfo
 import org.ward.android.util.AppLockPolicy
 import org.ward.android.util.AppLockStore
 
@@ -90,6 +103,19 @@ fun WardApp(vm: AppViewModel) {
         }
     }
     val accounts by vm.accounts.collectAsState()
+    // Ask GitHub at most once a day for a newer release. The timestamp is written before the
+    // request so a failed check still waits the full day instead of retrying on every start.
+    var update by remember { mutableStateOf<UpdateInfo?>(null) }
+    LaunchedEffect(unlocked) {
+        if (!unlocked || !vm.settings.bool("general.update_check")) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        if (now - vm.settings.lastUpdateCheck() < DAY_MS) return@LaunchedEffect
+        vm.settings.setLastUpdateCheck(now)
+        val info = withContext(Dispatchers.IO) { UpdateCheck.latest() } ?: return@LaunchedEffect
+        if (!UpdateCheck.isNewer(info.version, BuildConfig.VERSION_NAME)) return@LaunchedEffect
+        if (info.version == vm.settings.skippedUpdateVersion()) return@LaunchedEffect
+        update = info
+    }
     val settingsState by vm.settings.state.collectAsState()
     val runInBackground = settingsState["general.background"] != "false"
     val currentCall by vm.core.call.collectAsState()
@@ -150,4 +176,31 @@ fun WardApp(vm: AppViewModel) {
             }
         }
     }
+    update?.let { info ->
+        UpdateAvailableDialog(info) {
+            vm.settings.skipUpdateVersion(info.version)
+            update = null
+        }
+    }
 }
+
+/** A newer release was published on GitHub; the download stays on the releases page. */
+@Composable
+fun UpdateAvailableDialog(info: UpdateInfo, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.SystemUpdate, null) },
+        title = { Text("Ward ${info.version} is available") },
+        text = { Text("You are running ${BuildConfig.VERSION_NAME}. The new release is on the GitHub releases page, with its notes and the signed APK.") },
+        confirmButton = {
+            TextButton(onClick = {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.url))) }
+                onDismiss()
+            }) { Text("View release") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Later") } }
+    )
+}
+
+private const val DAY_MS = 24L * 60L * 60L * 1000L
