@@ -56,13 +56,9 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     BackHandler(enabled = onBack != null) { onBack?.invoke() }
-    if (page != null) {
-        SwipeBack(onBack = { page = null }) {
-            SettingsPage(vm, page!!, accounts, states, onBack = { page = null }, onNavigate = { page = it },
-                onAddAccount = onAddAccount)
-        }
-        return
-    }
+    // Keep the settings list composed underneath a subpage so a right-swipe reveals the list
+    // progressively instead of flashing it into existence at the end of the gesture.
+    val mainPage: @Composable () -> Unit = {
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(pad).statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
@@ -225,6 +221,21 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
             }
         }
         WardSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
+    }
+    Box(Modifier.fillMaxSize()) {
+        if (onBack != null) {
+            SwipeBack(onBack = onBack) { mainPage() }
+        } else {
+            mainPage()
+        }
+        val currentPage = page
+        if (currentPage != null) {
+            SwipeBack(onBack = { page = null }) {
+                SettingsPage(vm, currentPage, accounts, states, onBack = { page = null },
+                    onNavigate = { page = it }, onAddAccount = onAddAccount)
+            }
+        }
     }
 }
 

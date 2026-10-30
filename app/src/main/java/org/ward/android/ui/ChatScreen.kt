@@ -1040,9 +1040,12 @@ fun Composer(chat: ChatEntity, text: String, onText: (String) -> Unit, replyTo: 
     // recorder card should be visible, not a full-width panel behind them.
     Surface(color = Color.Transparent, tonalElevation = 0.dp,
         modifier = Modifier
+            // Measure the padded surface, not just its content: with the IME open the
+            // navigation/IME inset is part of the space the chat must reserve below its
+            // last bubble.
+            .onSizeChanged { onHeightChanged(it.height) }
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)
-                .only(WindowInsetsSides.Bottom))
-            .onSizeChanged { onHeightChanged(it.height) }) {
+                .only(WindowInsetsSides.Bottom))) {
         Column {
             AnimatedVisibility(visible = replyTo != null || editing != null,
                 enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
