@@ -259,10 +259,13 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                 // animation would make the destination pop in twice.
                 EnterTransition.None togetherWith ExitTransition.None
             } else {
-                (slideInHorizontally(animationSpec = tween(200)) { it } + fadeIn(tween(140))) togetherWith
-                    (slideOutHorizontally(animationSpec = tween(150)) { -it / 4 } + fadeOut(tween(100)))
+                // Pure horizontal push. The default AnimatedContent size transform makes the
+                // incoming page grow from a corner while its measured size changes.
+                (slideInHorizontally(animationSpec = tween(240)) { it } togetherWith
+                    slideOutHorizontally(animationSpec = tween(240)) { -it / 3 }).using(null)
             }
-        }, label = "main") { current ->
+        },
+        label = "main") { current ->
         when (current) {
             "settings" -> SettingsTab(vm, accounts, states, PaddingValues(0.dp),
                 onAddAccount = { addAccountScreen = true },
