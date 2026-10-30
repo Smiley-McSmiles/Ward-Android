@@ -252,7 +252,7 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
                 }) { Text("Share") } })
         }
     }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Box(Modifier.fillMaxSize()) {
         SwipeBack(onBack = onSwipeBack ?: onBack) { serverPage() }
         val activeCommand = command
         when {
