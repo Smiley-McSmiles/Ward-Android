@@ -276,7 +276,12 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                     settingsPage = null
                 },
                 initialPage = settingsPage)
-            "server" -> ServerTab(vm, accounts, states, PaddingValues(0.dp), onBack = { screen = "chats" })
+            "server" -> ServerTab(vm, accounts, states, PaddingValues(0.dp),
+                onBack = { screen = "chats" },
+                onSwipeBack = {
+                    skipNextScreenTransition = true
+                    screen = "chats"
+                })
             else -> Unit
         }
     }

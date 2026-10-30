@@ -51,7 +51,7 @@ import org.ward.android.xmpp.AdminNodes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long, ConnectionState>, pad: PaddingValues, onBack: () -> Unit = {}) {
+fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long, ConnectionState>, pad: PaddingValues, onBack: () -> Unit = {}, onSwipeBack: (() -> Unit)? = null) {
     val commands by vm.core.adminCommands.collectAsState()
     var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id ?: 0L) }
     var stats by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -82,178 +82,197 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
     LaunchedEffect(accountId, refresh, states[accountId]?.state) {
         if (states[accountId]?.state == "online") load()
     }
-    if (xml) { XmlConsolePage(vm, onBack = { xml = false }); return }
-    if (disco) { DiscoPage(vm, onBack = { disco = false }); return }
-    if (command != null) {
-        AdminCommandScreen(vm, accountId, command!!, onBack = { command = null; refresh++ })
-        return
-    }
-    BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-        .padding(pad).statusBarsPadding().navigationBarsPadding()) {
-        if (accounts.size > 1) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                accounts.forEach { a ->
-                    FilterChip(selected = a.id == accountId, onClick = { accountId = a.id },
-                        label = { Text(a.domain) })
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            WardBackButton(onBack)
-            Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                Text(acc?.domain ?: "Server", style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                Text("Administration", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            ServerActionButton(Icons.Filled.Refresh, "Refresh", enabled = !loading) { refresh++ }
-            ServerActionButton(Icons.Filled.Dns, "Service discovery") { disco = true }
-            ServerActionButton(Icons.Filled.Code, "XML console") { xml = true }
-        }
-
-        if (states[accountId]?.state != "online") {
-            Spacer(Modifier.height(8.dp))
-            SettingsGroup {
-                PanelListItem(
-                    headlineContent = { Text("Connect to manage this server", style = MaterialTheme.typography.titleMedium) },
-                    supportingContent = { Text(states[accountId]?.error?.takeIf { it.isNotBlank() }
-                        ?: "This account is offline. Connect it to load administration commands.") },
-                    leadingContent = { SettingsIconTile(Icons.Filled.CloudOff, WardIconColors.orange) })
-                SettingsDivider()
-                Row(Modifier.fillMaxWidth().padding(16.dp)) {
-                    if (acc != null) Button(onClick = { vm.connect(acc) }) { Text("Connect") }
-                }
-            }
-            return@Column
-        }
-
-        if (loading) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
-        }
-
-        LazyColumn(Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 34.dp)) {
-            if (error.isNotBlank()) {
-                item {
-                    SettingsGroup {
-                        PanelListItem(
-                            headlineContent = { Text("Could not load administration", style = MaterialTheme.typography.titleMedium) },
-                            supportingContent = { Text(error) },
-                            leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
+    BackHandler(enabled = command == null && !xml && !disco) { onBack() }
+    // The admin list stays composed under command/XML/discovery pages so swiping back reveals it.
+    val serverPage: @Composable () -> Unit = {
+        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+            .padding(pad).statusBarsPadding().navigationBarsPadding()) {
+            if (accounts.size > 1) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    accounts.forEach { a ->
+                        FilterChip(selected = a.id == accountId, onClick = { accountId = a.id },
+                            label = { Text(a.domain) })
                     }
                 }
             }
-
-            if (stats.isNotEmpty() || !loading) {
-            item { SettingsSectionLabel("Overview", "Server statistics published to administrators") }
-            item {
-                SettingsGroup {
-                    if (stats.isEmpty() && !loading) {
-                        PanelListItem(
-                            headlineContent = { Text("No statistics", style = MaterialTheme.typography.titleMedium) },
-                            supportingContent = { Text("The server shares no numbers, or this account is not an admin.") },
-                            leadingContent = { SettingsIconTile(Icons.Filled.Analytics, WardIconColors.grey) })
-                    } else {
-                        stats.entries.toList().forEachIndexed { index, (key, value) ->
-                            if (index > 0) SettingsDivider()
-                            PanelListItem(
-                                headlineContent = { Text(statLabel(key), style = MaterialTheme.typography.titleMedium) },
-                                leadingContent = { SettingsIconTile(statIcon(key), statColor(key)) },
-                                trailingContent = {
-                                    Text(value, style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.primary)
-                                })
-                        }
-                    }
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                WardBackButton(onBack)
+                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Text(acc?.domain ?: "Server", style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text("Administration", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            }
+                ServerActionButton(Icons.Filled.Refresh, "Refresh", enabled = !loading) { refresh++ }
+                ServerActionButton(Icons.Filled.Dns, "Service discovery") { disco = true }
+                ServerActionButton(Icons.Filled.Code, "XML console") { xml = true }
             }
 
-            item { SettingsSectionLabel("Invites") }
-            item {
+            if (states[accountId]?.state != "online") {
+                Spacer(Modifier.height(8.dp))
                 SettingsGroup {
                     PanelListItem(
-                        headlineContent = { Text("Create account invite", style = MaterialTheme.typography.titleMedium) },
-                        supportingContent = { Text("Generate a one-time link for a new account on this server") },
-                        leadingContent = { SettingsIconTile(Icons.Filled.AddLink, WardIconColors.green) },
-                        trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                        modifier = Modifier.clickable(enabled = !loading) {
-                            scope.launch {
-                                try {
-                                    val link = withContext(Dispatchers.IO) { session?.admin?.createInvite(false) ?: "" }
-                                    if (link.isNotBlank()) invite = link
-                                } catch (e: Exception) { error = adminError(e) }
-                            }
-                        })
+                        headlineContent = { Text("Connect to manage this server", style = MaterialTheme.typography.titleMedium) },
+                        supportingContent = { Text(states[accountId]?.error?.takeIf { it.isNotBlank() }
+                            ?: "This account is offline. Connect it to load administration commands.") },
+                        leadingContent = { SettingsIconTile(Icons.Filled.CloudOff, WardIconColors.orange) })
                     SettingsDivider()
-                    PanelListItem(
-                        headlineContent = { Text("How invites work", style = MaterialTheme.typography.titleMedium) },
-                        supportingContent = { Text("Invite links let someone create an account on this server. Each link works once.") },
-                        leadingContent = { SettingsIconTile(Icons.Filled.Link, WardIconColors.blue) })
+                    Row(Modifier.fillMaxWidth().padding(16.dp)) {
+                        if (acc != null) Button(onClick = { vm.connect(acc) }) { Text("Connect") }
+                    }
                 }
+                return@Column
             }
 
-            if (users.first.isNotEmpty()) {
-                item { SettingsSectionLabel(if (users.second == "online") "Online now" else "Users") }
+            if (loading) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
+            }
+
+            LazyColumn(Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 34.dp)) {
+                if (error.isNotBlank()) {
+                    item {
+                        SettingsGroup {
+                            PanelListItem(
+                                headlineContent = { Text("Could not load administration", style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = { Text(error) },
+                                leadingContent = { SettingsIconTile(Icons.Filled.ErrorOutline, WardIconColors.red) })
+                        }
+                    }
+                }
+
+                if (stats.isNotEmpty() || !loading) {
+                item { SettingsSectionLabel("Overview", "Server statistics published to administrators") }
                 item {
                     SettingsGroup {
-                        users.first.take(200).forEachIndexed { index, user ->
-                            if (index > 0) SettingsDivider()
+                        if (stats.isEmpty() && !loading) {
                             PanelListItem(
-                                headlineContent = { Text(user, style = MaterialTheme.typography.titleMedium) },
-                                leadingContent = { Avatar(user, 36) })
+                                headlineContent = { Text("No statistics", style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = { Text("The server shares no numbers, or this account is not an admin.") },
+                                leadingContent = { SettingsIconTile(Icons.Filled.Analytics, WardIconColors.grey) })
+                        } else {
+                            stats.entries.toList().forEachIndexed { index, (key, value) ->
+                                if (index > 0) SettingsDivider()
+                                PanelListItem(
+                                    headlineContent = { Text(statLabel(key), style = MaterialTheme.typography.titleMedium) },
+                                    leadingContent = { SettingsIconTile(statIcon(key), statColor(key)) },
+                                    trailingContent = {
+                                        Text(value, style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.primary)
+                                    })
+                            }
                         }
                     }
                 }
-            }
+                }
 
-            if (list.isNotEmpty() || !loading) {
-            item { SettingsSectionLabel("Commands", "Everything the server lets administrators do") }
-            item {
-                SettingsGroup {
-                    if (list.isEmpty() && !loading) {
+                item { SettingsSectionLabel("Invites") }
+                item {
+                    SettingsGroup {
                         PanelListItem(
-                            headlineContent = { Text("No commands available", style = MaterialTheme.typography.titleMedium) },
-                            supportingContent = { Text("Prosody and ejabberd expose their administration here when this account is an admin.") },
-                            leadingContent = { SettingsIconTile(Icons.Filled.Terminal, WardIconColors.grey) })
-                    } else {
-                        list.forEachIndexed { index, cmd ->
-                            if (index > 0) SettingsDivider()
-                            val prosody = cmd.node.contains("prosody")
-                            PanelListItem(
-                                headlineContent = { Text(cmd.name, style = MaterialTheme.typography.titleMedium) },
-                                supportingContent = { Text(cmd.node, maxLines = 2) },
-                                leadingContent = {
-                                    SettingsIconTile(if (prosody) Icons.Filled.Extension else Icons.Filled.Terminal,
-                                        if (prosody) WardIconColors.purple else WardIconColors.blue)
-                                },
-                                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                                modifier = Modifier.clickable { command = cmd })
+                            headlineContent = { Text("Create account invite", style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text("Generate a one-time link for a new account on this server") },
+                            leadingContent = { SettingsIconTile(Icons.Filled.AddLink, WardIconColors.green) },
+                            trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                            modifier = Modifier.clickable(enabled = !loading) {
+                                scope.launch {
+                                    try {
+                                        val link = withContext(Dispatchers.IO) { session?.admin?.createInvite(false) ?: "" }
+                                        if (link.isNotBlank()) invite = link
+                                    } catch (e: Exception) { error = adminError(e) }
+                                }
+                            })
+                        SettingsDivider()
+                        PanelListItem(
+                            headlineContent = { Text("How invites work", style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text("Invite links let someone create an account on this server. Each link works once.") },
+                            leadingContent = { SettingsIconTile(Icons.Filled.Link, WardIconColors.blue) })
+                    }
+                }
+
+                if (users.first.isNotEmpty()) {
+                    item { SettingsSectionLabel(if (users.second == "online") "Online now" else "Users") }
+                    item {
+                        SettingsGroup {
+                            users.first.take(200).forEachIndexed { index, user ->
+                                if (index > 0) SettingsDivider()
+                                PanelListItem(
+                                    headlineContent = { Text(user, style = MaterialTheme.typography.titleMedium) },
+                                    leadingContent = { Avatar(user, 36) })
+                            }
                         }
                     }
                 }
-            }
+
+                if (list.isNotEmpty() || !loading) {
+                item { SettingsSectionLabel("Commands", "Everything the server lets administrators do") }
+                item {
+                    SettingsGroup {
+                        if (list.isEmpty() && !loading) {
+                            PanelListItem(
+                                headlineContent = { Text("No commands available", style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = { Text("Prosody and ejabberd expose their administration here when this account is an admin.") },
+                                leadingContent = { SettingsIconTile(Icons.Filled.Terminal, WardIconColors.grey) })
+                        } else {
+                            list.forEachIndexed { index, cmd ->
+                                if (index > 0) SettingsDivider()
+                                val prosody = cmd.node.contains("prosody")
+                                PanelListItem(
+                                    headlineContent = { Text(cmd.name, style = MaterialTheme.typography.titleMedium) },
+                                    supportingContent = { Text(cmd.node, maxLines = 2) },
+                                    leadingContent = {
+                                        SettingsIconTile(if (prosody) Icons.Filled.Extension else Icons.Filled.Terminal,
+                                            if (prosody) WardIconColors.purple else WardIconColors.blue)
+                                    },
+                                    trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                                    modifier = Modifier.clickable { command = cmd })
+                            }
+                        }
+                    }
+                }
+                }
             }
         }
-    }
 
-    if (invite != null) {
-        AlertDialog(onDismissRequest = { invite = null }, title = { Text("Invite") },
-            text = { Column { Text("Send this link to the person you invite. It works once."); Spacer(Modifier.height(8.dp))
-                SelectionContainer { Text(invite!!, fontFamily = FontFamily.Monospace) } } },
-            confirmButton = { TextButton(onClick = {
-                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("Invite", invite))
-                invite = null
-            }) { Text("Copy") } },
-            dismissButton = { TextButton(onClick = {
-                val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, invite) }
-                context.startActivity(Intent.createChooser(send, "Share invite"))
-            }) { Text("Share") } })
+        if (invite != null) {
+            AlertDialog(onDismissRequest = { invite = null }, title = { Text("Invite") },
+                text = { Column { Text("Send this link to the person you invite. It works once."); Spacer(Modifier.height(8.dp))
+                    SelectionContainer { Text(invite!!, fontFamily = FontFamily.Monospace) } } },
+                confirmButton = { TextButton(onClick = {
+                    val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Invite", invite))
+                    invite = null
+                }) { Text("Copy") } },
+                dismissButton = { TextButton(onClick = {
+                    val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, invite) }
+                    context.startActivity(Intent.createChooser(send, "Share invite"))
+                }) { Text("Share") } })
+        }
+    }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        SwipeBack(onBack = onSwipeBack ?: onBack) { serverPage() }
+        val activeCommand = command
+        when {
+            xml -> key("xml") {
+                SwipeBack(onBack = { xml = false }, enterFromRight = true) {
+                    XmlConsolePage(vm, onBack = { xml = false })
+                }
+            }
+            disco -> key("disco") {
+                SwipeBack(onBack = { disco = false }, enterFromRight = true) {
+                    DiscoPage(vm, onBack = { disco = false })
+                }
+            }
+            activeCommand != null -> key(activeCommand) {
+                SwipeBack(onBack = { command = null; refresh++ }, enterFromRight = true) {
+                    AdminCommandScreen(vm, accountId, activeCommand,
+                        onBack = { command = null; refresh++ })
+                }
+            }
+        }
     }
 }
 
