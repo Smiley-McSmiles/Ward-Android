@@ -512,6 +512,11 @@ class WardCore private constructor(val context: Context) {
         }
 
         val encryptedChat = effectiveEncryption(chat, acc) != "off"
+        val mimeExtension = android.webkit.MimeTypeMap.getSingleton()
+            .getExtensionFromMimeType(mime)?.takeIf { it.isNotBlank() }
+        val uploadName = if (name.substringAfterLast('.', "").isBlank() && mimeExtension != null) {
+            "$name.$mimeExtension"
+        } else name
         var link = ""
         var fileEncrypted = false
         if (encryptedChat) {
@@ -520,13 +525,16 @@ class WardCore private constructor(val context: Context) {
                 runCatching { org.ward.android.util.FileCrypto.encrypt(tmp, enc) }.getOrNull()
             } ?: return fail("Could not encrypt file")
             val https = withContext(Dispatchers.IO) {
-                runCatching { session.upload(enc, name + ".enc", "application/octet-stream") }.getOrNull()
+                // Keep the original extension in the upload URL. Cheogram/Conversations infer the
+                // decrypted file type from that extension; an ".enc" suffix makes a photo look
+                // like an unknown file and leaves the receiver with no app to open it.
+                runCatching { session.upload(enc, uploadName, "application/octet-stream") }.getOrNull()
             } ?: return fail("Upload failed")
             link = org.ward.android.util.FileCrypto.aesgcmUrl(https, keys.second, keys.first)
             fileEncrypted = true
         } else {
             link = withContext(Dispatchers.IO) {
-                runCatching { session.upload(tmp, name, mime) }.getOrNull()
+                runCatching { session.upload(tmp, uploadName, mime) }.getOrNull()
             } ?: return fail("Upload failed")
         }
         val attachments = listOf(mapOf(
