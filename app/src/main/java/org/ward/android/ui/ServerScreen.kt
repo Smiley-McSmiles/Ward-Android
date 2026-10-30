@@ -89,7 +89,8 @@ fun ServerTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long,
         return
     }
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().padding(pad).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+        .padding(pad).statusBarsPadding().navigationBarsPadding()) {
         if (accounts.size > 1) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 4.dp),
