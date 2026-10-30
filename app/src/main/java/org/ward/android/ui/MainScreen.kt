@@ -104,7 +104,151 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     LaunchedEffect(filter, showArchived, accountFilter) {
         if (selectionMode) clearChatSelection()
     }
+    // The chat list stays composed underneath settings/server so a swipe can reveal it.
+    val chatListContent: @Composable () -> Unit = {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            snackbarHost = { WardSnackbarHost(snackbar) },
+            topBar = {
+                if (selectionMode) {
+                    SelectionTopBar(
+                        count = selectedChatIds.size,
+                        archivedView = showArchived,
+                        onClose = { clearChatSelection() },
+                        onArchive = {
+                            val targets = selectedChats
+                            val archive = !showArchived
+                            vm.setArchivedAll(targets, archive) {
+                                clearChatSelection()
+                                uiScope.launch {
+                                    snackbar.showSnackbar(
+                                        (if (archive) "Archived " else "Unarchived ") + chatCount(targets.size))
+                                }
+                            }
+                        },
+                        onRead = {
+                            val targets = selectedChats
+                            vm.markReadAll(targets) {
+                                clearChatSelection()
+                                uiScope.launch { snackbar.showSnackbar("Marked ${chatCount(targets.size)} as read") }
+                            }
+                        },
+                        onDelete = { confirmDeleteSelection = true }
+                    )
+                } else {
+                TopAppBar(colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.background), title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box {
+                            TextButton(onClick = { accountMenu = true }) {
+                                val active = accounts.firstOrNull { it.id == accountFilter } ?: accounts.firstOrNull()
+                                Avatar(active?.displayName ?: "Ward", 30,
+                                    active?.color ?: "",
+                                    photo = active?.avatar ?: "")
+                            }
+                            DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
+                                DropdownMenuItem(text = { Text("All accounts") },
+                                    leadingIcon = { if (accountFilter == null) Icon(Icons.Filled.Check, null) else Spacer(Modifier.size(24.dp)) },
+                                    onClick = { accountFilter = null; accountMenu = false })
+                                for (acc in accounts) {
+                                    DropdownMenuItem(text = {
+                                        Column { Text(acc.displayName, fontWeight = FontWeight.Medium); Text(acc.jid, style = MaterialTheme.typography.bodySmall) }
+                                    }, leadingIcon = {
+                                        if (accountFilter == acc.id) Icon(Icons.Filled.Check, null)
+                                        else Avatar(acc.displayName, 32, acc.color,
+                                            show = states[acc.id]?.state?.let { if (it == "online") "available" else "offline" },
+                                            photo = acc.avatar)
+                                    },
+                                        onClick = { accountFilter = acc.id; accountMenu = false })
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(text = { Text("Account settings") },
+                                    leadingIcon = { Icon(Icons.Filled.ManageAccounts, null) },
+                                    onClick = {
+                                        val id = accountFilter ?: accounts.firstOrNull()?.id
+                                        accountMenu = false
+                                        if (id != null) { settingsPage = "account:$id"; screen = "settings" }
+                                    })
+                                DropdownMenuItem(text = { Text("Manage accounts") },
+                                    leadingIcon = { Icon(Icons.Filled.People, null) },
+                                    onClick = { accountMenu = false; settingsPage = "accounts"; screen = "settings" })
+                                DropdownMenuItem(text = { Text("Add account") }, leadingIcon = { Icon(Icons.Filled.Add, null) },
+                                    onClick = { accountMenu = false; addAccountScreen = true })
+                                HorizontalDivider()
+                                for ((show, label) in listOf("available" to "Available", "away" to "Away", "dnd" to "Busy", "xa" to "Away for a while", "offline" to "Offline")) {
+                                    DropdownMenuItem(text = { Text(label) }, leadingIcon = { PresenceDot(show) },
+                                        onClick = { accountMenu = false; vm.setPresence(show) })
+                                }
+                            }
+                        }
+                        Text("Ward", fontWeight = FontWeight.Bold)
+                    }
+                }, actions = {
+                    IconButton(
+                        enabled = !resyncingHistory,
+                        onClick = {
+                            resyncingHistory = true
+                            vm.resyncHistory(accountFilter) { result ->
+                                resyncingHistory = false
+                                uiScope.launch {
+                                    snackbar.showSnackbar(result, withDismissAction = true,
+                                        duration = SnackbarDuration.Long)
+                                }
+                            }
+                        }
+                    ) {
+                        if (resyncingHistory) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Filled.Refresh, "Re-sync chat history from the server")
+                        }
+                    }
+                    IconButton(onClick = { searchMode = true }) { Icon(Icons.Filled.Search, "Search") }
+                    Box {
+                        IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Filled.MoreVert, "More") }
+                        DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                            DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) },
+                                onClick = { overflowMenu = false; settingsPage = null; screen = "settings" })
+                            DropdownMenuItem(text = { Text("New group") }, leadingIcon = { Icon(Icons.Filled.GroupAdd, null) },
+                                onClick = { overflowMenu = false; dialog = "group" })
+                            DropdownMenuItem(text = { Text("Join group") }, leadingIcon = { Icon(Icons.Filled.Login, null) },
+                                onClick = { overflowMenu = false; dialog = "join" })
+                            if (hasAdmin) DropdownMenuItem(text = { Text("Server administration") },
+                                leadingIcon = { Icon(Icons.Filled.Dns, null) },
+                                onClick = { overflowMenu = false; screen = "server" })
+                        }
+                    }
+                })
+                }
+            }
+        ) { pad ->
+            Box(Modifier.fillMaxSize()) {
+                ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it },
+                    showArchived, { showArchived = it }, accountFilter, pad, searchMode,
+                    onCloseSearch = { searchMode = false; search = "" }, onNewChat = { dialog = "new" },
+                    selectionMode = selectionMode, selectedChatIds = selectedChatIds,
+                    onToggleSelect = { toggleChatSelection(it) },
+                    onLongSelect = { startChatSelection(it) })
+                if (!selectionMode) {
+                    if (hasAdmin) {
+                        SmallFloatingActionButton(onClick = { screen = "server" }, shape = CircleShape,
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(18.dp)) {
+                            Icon(Icons.Filled.Dns, "Server administration")
+                        }
+                    }
+                    FloatingActionButton(onClick = { addSheet = true }, shape = CircleShape,
+                        modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(18.dp)) {
+                        Icon(Icons.Filled.Add, "New message or contact")
+                    }
+                }
+            }
+        }
+    }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Always compose the chat list beneath overlays so settings swipes reveal real content.
+    chatListContent()
     LaunchedEffect(screen) {
         if (skipNextScreenTransition) skipNextScreenTransition = false
     }
@@ -130,145 +274,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
                 },
                 initialPage = settingsPage)
             "server" -> ServerTab(vm, accounts, states, PaddingValues(0.dp), onBack = { screen = "chats" })
-            else -> Scaffold(
-                containerColor = MaterialTheme.colorScheme.background,
-                snackbarHost = { WardSnackbarHost(snackbar) },
-                topBar = {
-                    if (selectionMode) {
-                        SelectionTopBar(
-                            count = selectedChatIds.size,
-                            archivedView = showArchived,
-                            onClose = { clearChatSelection() },
-                            onArchive = {
-                                val targets = selectedChats
-                                val archive = !showArchived
-                                vm.setArchivedAll(targets, archive) {
-                                    clearChatSelection()
-                                    uiScope.launch {
-                                        snackbar.showSnackbar(
-                                            (if (archive) "Archived " else "Unarchived ") + chatCount(targets.size))
-                                    }
-                                }
-                            },
-                            onRead = {
-                                val targets = selectedChats
-                                vm.markReadAll(targets) {
-                                    clearChatSelection()
-                                    uiScope.launch { snackbar.showSnackbar("Marked ${chatCount(targets.size)} as read") }
-                                }
-                            },
-                            onDelete = { confirmDeleteSelection = true }
-                        )
-                    } else {
-                    TopAppBar(colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        scrolledContainerColor = MaterialTheme.colorScheme.background), title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box {
-                                TextButton(onClick = { accountMenu = true }) {
-                                    val active = accounts.firstOrNull { it.id == accountFilter } ?: accounts.firstOrNull()
-                                    Avatar(active?.displayName ?: "Ward", 30,
-                                        active?.color ?: "",
-                                        photo = active?.avatar ?: "")
-                                }
-                                DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
-                                    DropdownMenuItem(text = { Text("All accounts") },
-                                        leadingIcon = { if (accountFilter == null) Icon(Icons.Filled.Check, null) else Spacer(Modifier.size(24.dp)) },
-                                        onClick = { accountFilter = null; accountMenu = false })
-                                    for (acc in accounts) {
-                                        DropdownMenuItem(text = {
-                                            Column { Text(acc.displayName, fontWeight = FontWeight.Medium); Text(acc.jid, style = MaterialTheme.typography.bodySmall) }
-                                        }, leadingIcon = {
-                                            if (accountFilter == acc.id) Icon(Icons.Filled.Check, null)
-                                            else Avatar(acc.displayName, 32, acc.color,
-                                                show = states[acc.id]?.state?.let { if (it == "online") "available" else "offline" },
-                                                photo = acc.avatar)
-                                        },
-                                            onClick = { accountFilter = acc.id; accountMenu = false })
-                                    }
-                                    HorizontalDivider()
-                                    DropdownMenuItem(text = { Text("Account settings") },
-                                        leadingIcon = { Icon(Icons.Filled.ManageAccounts, null) },
-                                        onClick = {
-                                            val id = accountFilter ?: accounts.firstOrNull()?.id
-                                            accountMenu = false
-                                            if (id != null) { settingsPage = "account:$id"; screen = "settings" }
-                                        })
-                                    DropdownMenuItem(text = { Text("Manage accounts") },
-                                        leadingIcon = { Icon(Icons.Filled.People, null) },
-                                        onClick = { accountMenu = false; settingsPage = "accounts"; screen = "settings" })
-                                    DropdownMenuItem(text = { Text("Add account") }, leadingIcon = { Icon(Icons.Filled.Add, null) },
-                                        onClick = { accountMenu = false; addAccountScreen = true })
-                                    HorizontalDivider()
-                                    for ((show, label) in listOf("available" to "Available", "away" to "Away", "dnd" to "Busy", "xa" to "Away for a while", "offline" to "Offline")) {
-                                        DropdownMenuItem(text = { Text(label) }, leadingIcon = { PresenceDot(show) },
-                                            onClick = { accountMenu = false; vm.setPresence(show) })
-                                    }
-                                }
-                            }
-                            Text("Ward", fontWeight = FontWeight.Bold)
-                        }
-                    }, actions = {
-                        IconButton(
-                            enabled = !resyncingHistory,
-                            onClick = {
-                                resyncingHistory = true
-                                vm.resyncHistory(accountFilter) { result ->
-                                    resyncingHistory = false
-                                    uiScope.launch {
-                                        snackbar.showSnackbar(result, withDismissAction = true,
-                                            duration = SnackbarDuration.Long)
-                                    }
-                                }
-                            }
-                        ) {
-                            if (resyncingHistory) {
-                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Filled.Refresh, "Re-sync chat history from the server")
-                            }
-                        }
-                        IconButton(onClick = { searchMode = true }) { Icon(Icons.Filled.Search, "Search") }
-                        Box {
-                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Filled.MoreVert, "More") }
-                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
-                                DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) },
-                                    onClick = { overflowMenu = false; settingsPage = null; screen = "settings" })
-                                DropdownMenuItem(text = { Text("New group") }, leadingIcon = { Icon(Icons.Filled.GroupAdd, null) },
-                                    onClick = { overflowMenu = false; dialog = "group" })
-                                DropdownMenuItem(text = { Text("Join group") }, leadingIcon = { Icon(Icons.Filled.Login, null) },
-                                    onClick = { overflowMenu = false; dialog = "join" })
-                                if (hasAdmin) DropdownMenuItem(text = { Text("Server administration") },
-                                    leadingIcon = { Icon(Icons.Filled.Dns, null) },
-                                    onClick = { overflowMenu = false; screen = "server" })
-                            }
-                        }
-                    })
-                    }
-                }
-            ) { pad ->
-                Box(Modifier.fillMaxSize()) {
-                    ChatsTab(vm, chats, requests, typing, states, search, { search = it }, filter, { filter = it },
-                        showArchived, { showArchived = it }, accountFilter, pad, searchMode,
-                        onCloseSearch = { searchMode = false; search = "" }, onNewChat = { dialog = "new" },
-                        selectionMode = selectionMode, selectedChatIds = selectedChatIds,
-                        onToggleSelect = { toggleChatSelection(it) },
-                        onLongSelect = { startChatSelection(it) })
-                    if (!selectionMode) {
-                        if (hasAdmin) {
-                            SmallFloatingActionButton(onClick = { screen = "server" }, shape = CircleShape,
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(18.dp)) {
-                                Icon(Icons.Filled.Dns, "Server administration")
-                            }
-                        }
-                        FloatingActionButton(onClick = { addSheet = true }, shape = CircleShape,
-                            modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(18.dp)) {
-                            Icon(Icons.Filled.Add, "New message or contact")
-                        }
-                    }
-                }
-            }
+            else -> Unit
         }
     }
     if (passwordFor != null) {
