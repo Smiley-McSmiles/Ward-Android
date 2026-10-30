@@ -50,6 +50,7 @@ private fun connectionLabel(state: ConnectionState?): String = when (state?.stat
 @Composable
 fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Long, ConnectionState>,
                 pad: PaddingValues, onAddAccount: () -> Unit, onBack: (() -> Unit)? = null,
+                onSwipeBack: (() -> Unit)? = null,
                 initialPage: String? = null) {
     var page by remember(initialPage) { mutableStateOf(initialPage) }
     var search by remember { mutableStateOf("") }
@@ -224,16 +225,19 @@ fun SettingsTab(vm: AppViewModel, accounts: List<AccountEntity>, states: Map<Lon
     }
     }
     Box(Modifier.fillMaxSize()) {
-        if (onBack != null) {
-            SwipeBack(onBack = onBack) { mainPage() }
+        val swipeBack = onSwipeBack ?: onBack
+        if (swipeBack != null) {
+            SwipeBack(onBack = swipeBack) { mainPage() }
         } else {
             mainPage()
         }
         val currentPage = page
         if (currentPage != null) {
-            SwipeBack(onBack = { page = null }) {
-                SettingsPage(vm, currentPage, accounts, states, onBack = { page = null },
-                    onNavigate = { page = it }, onAddAccount = onAddAccount)
+            key(currentPage) {
+                SwipeBack(onBack = { page = null }, enterFromRight = true) {
+                    SettingsPage(vm, currentPage, accounts, states, onBack = { page = null },
+                        onNavigate = { page = it }, onAddAccount = onAddAccount)
+                }
             }
         }
     }

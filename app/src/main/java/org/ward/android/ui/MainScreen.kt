@@ -3,6 +3,7 @@ package org.ward.android.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideInHorizontally
@@ -55,6 +56,7 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     val typing by vm.typing.collectAsState()
     val selected by vm.selectedChat.collectAsState()
     var screen by remember { mutableStateOf("chats") }
+    var skipNextScreenTransition by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<String?>(null) }
     var search by remember { mutableStateOf("") }
     var searchMode by remember { mutableStateOf(false) }
@@ -103,14 +105,29 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
         if (selectionMode) clearChatSelection()
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    LaunchedEffect(screen) {
+        if (skipNextScreenTransition) skipNextScreenTransition = false
+    }
     AnimatedContent(targetState = screen,
         transitionSpec = {
-            (slideInHorizontally(animationSpec = tween(200)) { it } + fadeIn(tween(140))) togetherWith
-                (slideOutHorizontally(animationSpec = tween(150)) { -it / 4 } + fadeOut(tween(100)))
+            if (skipNextScreenTransition) {
+                // The settings page has already been swiped fully off-screen; another entrance
+                // animation would make the destination pop in twice.
+                EnterTransition.None togetherWith ExitTransition.None
+            } else {
+                (slideInHorizontally(animationSpec = tween(200)) { it } + fadeIn(tween(140))) togetherWith
+                    (slideOutHorizontally(animationSpec = tween(150)) { -it / 4 } + fadeOut(tween(100)))
+            }
         }, label = "main") { current ->
         when (current) {
             "settings" -> SettingsTab(vm, accounts, states, PaddingValues(0.dp),
-                onAddAccount = { addAccountScreen = true }, onBack = { screen = "chats"; settingsPage = null },
+                onAddAccount = { addAccountScreen = true },
+                onBack = { screen = "chats"; settingsPage = null },
+                onSwipeBack = {
+                    skipNextScreenTransition = true
+                    screen = "chats"
+                    settingsPage = null
+                },
                 initialPage = settingsPage)
             "server" -> ServerTab(vm, accounts, states, PaddingValues(0.dp), onBack = { screen = "chats" })
             else -> Scaffold(

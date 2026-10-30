@@ -23,13 +23,22 @@ import kotlin.math.roundToInt
 /**
  * Right-swipe to leave a page, the same gesture the chat screen uses. Only a mostly horizontal
  * drag is claimed, so lists inside the content keep their vertical scrolling.
+ *
+ * [enterFromRight] starts the page off-screen and slides it in, which makes a newly opened
+ * settings subpage feel like it is being pushed over the page underneath.
  */
 @Composable
-fun SwipeBack(onBack: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+fun SwipeBack(onBack: () -> Unit, enterFromRight: Boolean = false,
+              content: @Composable BoxScope.() -> Unit) {
     val configuration = LocalConfiguration.current
     val maxSwipe = with(LocalDensity.current) { configuration.screenWidthDp.dp.toPx() }
     val scope = rememberCoroutineScope()
-    var offsetPx by remember { mutableStateOf(0f) }
+    var offsetPx by remember { mutableFloatStateOf(if (enterFromRight) maxSwipe else 0f) }
+    LaunchedEffect(enterFromRight, maxSwipe) {
+        if (enterFromRight && offsetPx > 0f) {
+            animate(offsetPx, 0f, animationSpec = tween(240)) { value, _ -> offsetPx = value }
+        }
+    }
     Box(
         Modifier.fillMaxSize()
             .offset { IntOffset(offsetPx.roundToInt(), 0) }
@@ -65,10 +74,9 @@ fun SwipeBack(onBack: () -> Unit, content: @Composable BoxScope.() -> Unit) {
                             animate(offsetPx, if (shouldClose) maxSwipe else 0f, animationSpec = tween(220)) { value, _ ->
                                 offsetPx = value
                             }
-                            if (shouldClose) {
-                                offsetPx = 0f
-                                onBack()
-                            }
+                            // Leave a completed swipe off-screen. Resetting to 0 here makes the
+                            // page flash back before the caller's navigation animation starts.
+                            if (shouldClose) onBack()
                         }
                     }
                 }
