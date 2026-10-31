@@ -11,3 +11,6 @@ Feedback/
 *.aab
 *.jks
 *.keystore
+
+dist/
+*.idsig

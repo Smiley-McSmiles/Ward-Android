@@ -1,0 +1,32 @@
+AntiFeatures:
+  - NonFreeNet
+Categories:
+  - Internet
+  - Messaging
+  - Voice & Video Chat
+License: GPL-3.0-only
+AuthorName: WOOSAH
+AuthorEmail: woosaah@proton.me
+WebSite: https://sonder.guru
+SourceCode: https://github.com/Smiley-McSmiles/Ward-Android
+IssueTracker: https://github.com/Smiley-McSmiles/Ward-Android/issues
+Changelog: https://github.com/Smiley-McSmiles/Ward-Android/releases
+
+AutoName: Ward
+
+RepoType: git
+Repo: https://github.com/Smiley-McSmiles/Ward-Android.git
+
+Builds:
+  - versionName: 1.0.7
+    versionCode: 8
+    commit: v1.0.7
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/app-release-unsigned.apk
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[\d.]+$
+UpdateCheckData: app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"([\d.]+)"
+CurrentVersion: 1.0.7
+CurrentVersionCode: 8

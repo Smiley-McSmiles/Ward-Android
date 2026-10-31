@@ -62,7 +62,7 @@ object SettingsSchema {
         // ------------------------------------------------------------- General
         b("general.background", "Run in the background", "Stay connected when Ward is not on screen so messages and calls still arrive", "general", "Background", true),
         b("general.autostart", "Start after restarting the phone", "Reconnect automatically after Android finishes booting", "general", "Background"),
-        b("general.update_check", "Check for updates", "Ask GitHub once a day for a newer Ward release", "general", "Updates", true),
+        b("general.update_check", "Check for updates", "Opt in to asking GitHub once a day for a newer Ward release", "general", "Updates", false),
 
         // ---------------------------------------------------------- Appearance
         c("appearance.style", "Theme", "Follow the system, or always use light or dark", "appearance", "Colours", "system",

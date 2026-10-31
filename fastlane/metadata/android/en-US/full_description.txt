@@ -1,0 +1,35 @@
+Ward for Android is a native XMPP messenger: end-to-end encrypted chats on the open network, with no Google services, no tracking and no account on somebody else's server.
+
+ENCRYPTED BY DEFAULT
+
+OMEMO 2 (XEP-0384 0.8 with Stanza Content Encryption) protects one-to-one chats, with legacy OMEMO 0.3 available for older contacts. Every message shows its lock and trust state. Device fingerprints can be reviewed or forgotten, and Ward never silently falls back to plaintext. Basic OpenPGP is available too.
+
+CHATS THAT FEEL NATIVE
+
+One-to-one and group chats, message requests, replies, reactions, edits, delete for everyone, delivery and read receipts, typing notifications, drafts, mentions, Markdown, pinned and archived chats, and full-text search.
+
+FILES, IMAGES AND VOICE
+
+HTTP upload (XEP-0363), AES-256-GCM encrypted uploads (XEP-0454) in encrypted chats, local decryption, image previews, file metadata and voice messages.
+
+GROUPS AND CHANNELS
+
+Private groups and public channels with invites, members, roles, moderation, topics, bookmarks with autojoin and group search.
+
+AUDIO AND VIDEO CALLS
+
+One-to-one calls with Jingle Message Initiation, ICE/DTLS-SRTP through WebRTC, STUN/TURN support, mute, speaker and camera controls.
+
+ANY XMPP SERVER
+
+Use your own server or any public one, with STARTTLS, self-signed certificates and trust on first use, several accounts, avatars, presence and account management.
+
+FOR SERVER ADMINS
+
+All ad-hoc commands (XEP-0050) your server advertises, with native forms, CAPTCHA media, user lists, uptime and account invites.
+
+GOOD ANDROID CITIZEN
+
+A remoteMessaging foreground service with XEP-0198 stream management, notifications with chat deep links, boot autostart, share and open intents, adaptive Material 3 themes, an optional app lock and screenshot blocking.
+
+Ward works with Conversations, Monal, Dino, Gajim and Ward for GTK. It is free software: the app's own code is MIT-licensed and the complete source is published. The APK is distributed under GPL-3.0 because it includes GPL encryption libraries; see the repository for details.

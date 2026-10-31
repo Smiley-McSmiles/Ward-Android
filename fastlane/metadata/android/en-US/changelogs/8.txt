@@ -1,0 +1,1 @@
+First F-Droid release. OMEMO 2 and legacy OMEMO are now built from source instead of bundled JARs. Added complete third-party license notices and F-Droid metadata. No changes to chats or accounts.

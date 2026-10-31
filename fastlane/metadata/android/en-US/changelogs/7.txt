@@ -1,0 +1,1 @@
+Ward 1.0.6: OMEMO 2 messaging, a full XMPP admin panel, audio and video calls, Markdown, files and voice messages, and a rebuilt settings flow. The admin page now swipes back to the chat list.

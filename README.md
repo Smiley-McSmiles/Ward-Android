@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Smiley-McSmiles/Ward-Android/releases"><img src="https://img.shields.io/badge/version-1.0.6-blue.svg?style=flat-square" alt="Version 1.0.6"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="MIT License"></a>
+  <a href="https://github.com/Smiley-McSmiles/Ward-Android/releases"><img src="https://img.shields.io/badge/version-1.0.7-blue.svg?style=flat-square" alt="Version 1.0.7"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20GPL--3.0-green.svg?style=flat-square" alt="MIT source, GPL-3.0 APK"></a>
   <img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.0">
   <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4.svg?style=flat-square" alt="Jetpack Compose and Material 3">
   <img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84.svg?style=flat-square&logo=android&logoColor=white" alt="Android 8.0 and newer">
@@ -75,7 +75,8 @@ OpenPGP support is intentionally basic: text messages with XEP-0374, key generat
 
 The app requires **Android 8.0 (API 26) or newer**. Download the latest signed APK from the
 [releases page](https://github.com/Smiley-McSmiles/Ward-Android/releases), then open it on the device and allow
-installation from that source if Android asks.
+installation from that source if Android asks. Ward is also being prepared for the main F-Droid repository; the
+store metadata is in [`fastlane/`](fastlane/) and the fdroiddata build recipe is in [`fdroid/`](fdroid/).
 
 There is no Play Store build. The APK is signed with a local development key; verify the SHA-256 published with each
 release if you need to.
@@ -98,6 +99,19 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. `./build-apk.sh` is a small wrapper around the
 same command. `./sign-release.sh` builds a release APK and signs it with the local Android debug key so it can be
 installed directly; use your own signing configuration for a store build.
+
+The `:omemo2` module builds Dino's GPL-licensed libomemo/libsignal fork from its tagged JitPack source and relocates it
+into `org.ward.omemo2.signal` at build time. That keeps it from clashing with Smack's legacy OMEMO classes and means no
+prebuilt encryption JARs are stored in this repository. Gradle needs network access to Google Maven, Maven Central and
+JitPack for the first build.
+
+For F-Droid, build the same unsigned release APK:
+
+```sh
+./gradlew --no-daemon :app:assembleRelease
+```
+
+The APK is written to `app/build/outputs/apk/release/app-release-unsigned.apk`.
 
 ### Trying it with a local Prosody
 
@@ -150,8 +164,11 @@ chat used OMEMO 2 or legacy OMEMO. Do not paste private keys or account password
 
 ## License
 
-Ward for Android is MIT-licensed, like Ward. The Ward icon is Ward's icon.
+Ward for Android's own source is MIT-licensed, like Ward for GTK; see [LICENSE](LICENSE) and
+[LICENSES/MIT.txt](LICENSES/MIT.txt). The Ward icon is Ward's icon.
 
-The distributed APK also contains the Dino libomemo/libsignal fork (GPL-3.0), Smack (Apache-2.0),
-PGPainless/Bouncy Castle, Jetpack Compose, Coil and WebRTC. Because of the GPL components, the combined binary is
-distributed under GPL-3.0-compatible terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The distributed APK links GPL-3.0-only encryption libraries — Dino's libomemo/libsignal fork, signal-protocol-java via
+Smack, and Dino's curve25519 fork — so **the APK as a whole is distributed under GPL-3.0-only**. The full GPL text is
+in [LICENSES/GPL-3.0-only.txt](LICENSES/GPL-3.0-only.txt). The bundled freedesktop.org call sounds are
+GPL-2.0-or-later. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for every component, its license and its
+upstream source, and [LICENSES/](LICENSES/) for the license texts.

@@ -1,0 +1,1 @@
+Private XMPP chat with OMEMO end-to-end encryption

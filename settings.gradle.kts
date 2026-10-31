@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Ward"
 include(":app")
+include(":omemo2")

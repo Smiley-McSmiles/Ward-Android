@@ -117,8 +117,9 @@ class CoreTests {
         assertFalse(UpdateCheck.isNewer("1.0.4", "1.0.5"))
     }
 
-    @Test fun updateCheckIsOnByDefault() {
-        assertEquals(true, SettingsSchema.byKey["general.update_check"]?.default)
+    @Test fun updateCheckIsOptIn() {
+        // F-Droid treats automatic update checks as tracking unless the user opts in.
+        assertEquals(false, SettingsSchema.byKey["general.update_check"]?.default)
     }
 
     @Test fun encryptedFileBodyIsTheBareLink() {
