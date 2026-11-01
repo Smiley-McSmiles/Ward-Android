@@ -103,7 +103,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -165,7 +168,6 @@ fun ChatScreen(vm: AppViewModel) {
     var devices by remember { mutableStateOf(false) }
     var passwordOpen by remember { mutableStateOf(false) }
     var text by remember(c.id) { mutableStateOf(c.draft) }
-    var initialized by remember(c.id) { mutableStateOf(false) }
     // Picked files wait here until the send button, like the attachment tray in Google Messages.
     var pending by remember(c.id) { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
@@ -442,15 +444,44 @@ fun ChatScreen(vm: AppViewModel) {
             vm.markRead()
         }
     }
-    LaunchedEffect(text) {
-        if (!initialized) { initialized = true; return@LaunchedEffect }
-        delay(500)
-        vm.setDraft(text)
-        if (text.isNotBlank()) {
-            vm.typing("composing")
-            delay(4000)
-            vm.typing("paused")
-        } else vm.typing("active")
+    // Persist the draft after a short idle period instead of writing on every keystroke.
+    LaunchedEffect(c.id) {
+        snapshotFlow { text }.drop(1).collectLatest { value ->
+            delay(500)
+            vm.setDraft(value)
+        }
+    }
+    // Typing indicators are deliberately throttled: one composing stanza per 3 seconds while
+    // the user is actually changing the text, then one paused after 4 seconds of no changes.
+    LaunchedEffect(c.id) {
+        var lastComposing = 0L
+        var typingActive = false
+        var pausedJob: Job? = null
+        snapshotFlow { text }.drop(1).collect { value ->
+            if (value.isBlank()) {
+                pausedJob?.cancel()
+                pausedJob = null
+                if (typingActive) {
+                    vm.typing("active")
+                    typingActive = false
+                }
+                return@collect
+            }
+            val now = System.currentTimeMillis()
+            if (!typingActive || now - lastComposing >= 3_000) {
+                vm.typing("composing")
+                lastComposing = now
+                typingActive = true
+            }
+            pausedJob?.cancel()
+            pausedJob = launch {
+                delay(4_000)
+                if (typingActive) {
+                    vm.typing("paused")
+                    typingActive = false
+                }
+            }
+        }
     }
     val filtered = if (search.isBlank()) messages else messages.filter { it.body.contains(search, true) }
     // Keep the newest message above the floating composer when its height changes (keyboard,

@@ -35,6 +35,8 @@ import org.jivesoftware.smackx.forward.packet.Forwarded
 import org.jivesoftware.smackx.httpfileupload.HttpFileUploadManager
 import org.jivesoftware.smackx.httpfileupload.UploadService
 import org.jivesoftware.smackx.mam.MamManager
+import org.jivesoftware.smackx.pep.PepListener
+import org.jivesoftware.smackx.pep.PepManager
 import org.jivesoftware.smackx.pubsub.*
 import org.jivesoftware.smackx.pubsub.listener.ItemEventListener
 import org.jivesoftware.smackx.muc.*
@@ -55,6 +57,7 @@ import org.jivesoftware.smackx.receipts.DeliveryReceipt
 import org.jivesoftware.smackx.receipts.DeliveryReceiptManager
 import org.jivesoftware.smackx.receipts.ReceiptReceivedListener
 import org.jxmpp.jid.Jid
+import org.jxmpp.jid.EntityBareJid
 import org.jxmpp.jid.impl.JidCreate
 import org.jxmpp.jid.parts.Resourcepart
 import org.jxmpp.stringprep.XmppStringprepException
@@ -75,6 +78,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val AVATAR_META_NS = "urn:xmpp:avatar:metadata"
 private const val BOOKMARK_NS = "storage:bookmarks"
+private const val BOOKMARK2_NS = "urn:xmpp:bookmarks:1"
 
 private object rawBookmarkProvider : PrivateDataProvider {
     override fun parsePrivateData(parser: XmlPullParser): PrivateData =
@@ -341,6 +345,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             if (firstSession) runCatching { setupOpenPgp(conn) }
             runCatching { syncMam(conn) }
             runCatching { joinBookmarks() }
+            runCatching { syncPepBookmarks(conn) }
             runCatching { flushOutbox() }
         }
     }
@@ -520,6 +525,53 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         runCatching {
             val pm = org.jivesoftware.smackx.ping.PingManager.getInstanceFor(conn)
             pm.setPingInterval(core.settings.int("advanced.keepalive").coerceAtLeast(30))
+        }
+        runCatching { setupPepBookmarks(conn) }
+    }
+
+    /**
+     * XEP-0402 bookmarks live in PEP, not in the legacy storage:bookmarks private data. GTK Ward,
+     * Conversations and most current clients publish them there, so listen for changes and join
+     * rooms that were bookmarked on another device while Ward is already connected.
+     */
+    private fun setupPepBookmarks(conn: XMPPConnection) {
+        val pep = PepManager.getInstanceFor(conn)
+        pep.addPepListener(object : PepListener {
+            override fun eventReceived(from: EntityBareJid, event: EventElement, message: Message) {
+                val own = runCatching { JidCreate.entityBareFrom(account.jid) }.getOrNull() ?: return
+                if (from != own) return
+                val node = event.event?.node ?: return
+                if (node != BOOKMARK2_NS) return
+                core.addXmlLog(account.id, false, "PEP bookmark event on $node")
+                scope.launch { runCatching { syncPepBookmarks(conn) } }
+            }
+        })
+    }
+
+    private suspend fun syncPepBookmarks(conn: XMPPConnection) {
+        val pep = PepManager.getInstanceFor(conn)
+        val node = runCatching { pep.pepPubSubManager.getLeafNode(BOOKMARK2_NS) }
+            .onFailure { core.addXmlLog(account.id, false, "PEP bookmarks unavailable: ${it.message}") }
+            .getOrNull() ?: return
+        val items = runCatching { node.getItems<Item>() }
+            .onFailure { core.addXmlLog(account.id, false, "PEP bookmarks fetch failed: ${it.message}") }
+            .getOrElse { return }
+        core.addXmlLog(account.id, false, "PEP bookmarks: ${items.size} item(s)")
+        for (item in items) {
+            val roomJid = item.id ?: continue
+            val raw = item.toXML(XmlEnvironment.EMPTY).toString()
+            val conf = runCatching {
+                val doc = parseXml(raw)
+                doc.getElementsByTagNameNS(BOOKMARK2_NS, "conference").item(0) as? org.w3c.dom.Element
+            }.getOrNull() ?: continue
+            if (conf.getAttribute("autojoin") == "false") continue
+            fun childText(name: String): String =
+                (conf.getElementsByTagNameNS(BOOKMARK2_NS, name).item(0) as? org.w3c.dom.Element)
+                    ?.textContent.orEmpty()
+            val name = conf.getAttribute("name").ifBlank { roomJid.substringBefore('@') }
+            val chat = core.ensureChat(account.id, roomJid, "groupchat", name)
+            core.addXmlLog(account.id, false, "PEP bookmark: joining $roomJid")
+            joinRoomNow(chat, childText("nick"), childText("password"))
         }
     }
 
@@ -1187,27 +1239,33 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     // ============================================================ group chat
     fun joinRoom(chat: ChatEntity, nick: String = "", password: String = "") {
-        scope.launch {
-            try {
-                val conn = connection ?: throw IllegalStateException("Not connected")
-                if (!chat.jid.contains('@')) {
-                    throw IllegalStateException("That is the group service address, not a room. Use room@conference.${account.domain}")
-                }
-                val mgr = MultiUserChatManager.getInstanceFor(conn)
-                val roomJid = JidCreate.entityBareFrom(chat.jid)
-                val muc = rooms[chat.jid] ?: mgr.getMultiUserChat(roomJid).also { rooms[chat.jid] = it; setupMuc(it, chat) }
-                val resource = Resourcepart.from(nick.ifBlank { chat.ourNick.ifBlank { account.nickname.ifBlank { account.localpart } } })
-                if (!muc.isJoined) {
-                    if (password.isNotBlank()) muc.join(resource, password) else muc.join(resource)
-                }
-                val updated = chat.copy(joined = true, joinError = "", ourNick = resource.toString(),
-                    subject = muc.subject ?: chat.subject, memberCount = muc.occupantsCount)
-                core.dao.updateChat(updated)
-                updateOccupants(muc, chat)
-                runCatching { saveAutojoin(updated) }
-            } catch (e: Exception) {
-                core.dao.updateChat(chat.copy(joined = false, joinError = friendlyError(e)))
+        scope.launch { joinRoomNow(chat, nick, password) }
+    }
+
+    private suspend fun joinRoomNow(chat: ChatEntity, nick: String = "", password: String = "") {
+        try {
+            val conn = connection ?: throw IllegalStateException("Not connected")
+            if (!chat.jid.contains('@')) {
+                throw IllegalStateException("That is the group service address, not a room. Use room@conference.${account.domain}")
             }
+            val mgr = MultiUserChatManager.getInstanceFor(conn)
+            val roomJid = JidCreate.entityBareFrom(chat.jid)
+            val muc = rooms[chat.jid] ?: mgr.getMultiUserChat(roomJid).also { rooms[chat.jid] = it; setupMuc(it, chat) }
+            val resource = Resourcepart.from(nick.ifBlank { chat.ourNick.ifBlank { account.nickname.ifBlank { account.localpart } } })
+            if (!muc.isJoined) {
+                if (password.isNotBlank()) muc.join(resource, password) else muc.join(resource)
+            }
+            val updated = chat.copy(joined = true, joinError = "", ourNick = resource.toString(),
+                subject = muc.subject ?: chat.subject, memberCount = muc.occupantsCount)
+            core.dao.updateChat(updated)
+            updateOccupants(muc, chat)
+            // A room joined on another client has no local history yet. Pull the latest room
+            // archive page after joining so the group is usable immediately.
+            if (core.dao.messagesNow(updated.id, 1).isEmpty()) syncChat(updated)
+            runCatching { saveAutojoin(updated) }
+        } catch (e: Exception) {
+            core.addXmlLog(account.id, false, "Group join failed for ${chat.jid}: ${e.message}")
+            core.dao.updateChat(chat.copy(joined = false, joinError = friendlyError(e)))
         }
     }
 
@@ -1261,7 +1319,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     private fun processGroupMessage(muc: MultiUserChat, msg: Message, decryptedBody: String? = null,
-                                    senderDevice: Long = 0, encrypted: String = "") {
+                                    senderDevice: Long = 0, encrypted: String = "",
+                                    selfNick: String = muc.nickname?.toString().orEmpty()) {
         val roomJid = muc.room.toString()
         val nick = msg.from?.resourceOrNull?.toString() ?: return
         val body = decryptedBody ?: msg.body ?: ""
@@ -1293,7 +1352,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     .getOrNull()?.mapNotNull { it.text } ?: emptyList()
                 val list = parseReactions(old.reactionsJson).toMutableList()
                 list.removeAll { it.who == nick }
-                if (emojis.isNotEmpty()) list.add(ReactionSet(emojis, nick, nick == muc.nickname?.toString()))
+                if (emojis.isNotEmpty()) list.add(ReactionSet(emojis, nick, nick == selfNick))
                 core.dao.updateMessage(old.copy(reactionsJson = gson.toJson(list)))
                 return@launch
             }
@@ -1302,7 +1361,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             val cleanBody = bodyWithoutAttachmentUrls(body, attachments)
             val msgEntity = MessageEntity(chatId = chat.id, stanzaId = stanzaId,
                 originId = msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: "", msgId = msg.stanzaId ?: "",
-                sender = nick, senderJid = occ, senderName = nick, direction = if (nick == muc.nickname?.toString()) 1 else 0,
+                sender = nick, senderJid = occ, senderName = nick, direction = if (nick == selfNick) 1 else 0,
                 timestamp = timestamp, body = cleanBody.stripReplyQuote(reply),
                 kind = if (cleanBody.startsWith("/me ")) "me" else if (attachments.isNotEmpty()) "file" else "text",
                 encryption = encrypted, senderDevice = senderDevice, replyTo = reply?.getAttributeValue("id") ?: "",
@@ -1426,6 +1485,19 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             root.appendChild(c)
             writeBookmarks(conn, serializeXml(doc))
         }
+        // XEP-0402: the modern bookmark store that GTK Ward, Conversations and others read.
+        // Keep the legacy private storage above as well for older clients.
+        runCatching {
+            val nick = chat.ourNick.ifBlank { account.localpart }
+            val xml = buildString {
+                append("<conference xmlns='").append(BOOKMARK2_NS).append("' autojoin='true'")
+                if (chat.displayName.isNotBlank()) append(" name='").append(xmlEscape(chat.displayName)).append("'")
+                append("><nick>").append(xmlEscape(nick)).append("</nick>")
+                append("</conference>")
+            }
+            val item = PayloadItem<SimplePayload>(chat.jid, SimplePayload(xml))
+            PepManager.getInstanceFor(conn).publish(BOOKMARK2_NS, item)
+        }
     }
 
     /**
@@ -1434,7 +1506,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
      * "conference.example.org" (no room localpart) throws while parsing the IQ result and closes
      * the whole connection. Keeping the raw storage lets us drop only the bad entries.
      */
-    private fun joinBookmarks() {
+    private suspend fun joinBookmarks() {
         val conn = connection ?: return
         runCatching {
             val raw = rawBookmarks(conn) ?: return@runCatching
@@ -1462,10 +1534,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             }
             if (changed) writeBookmarks(conn, serializeXml(doc))
             for (b in valid) {
-                scope.launch {
-                    val chat = core.ensureChat(account.id, b.jid, "groupchat", b.name)
-                    joinRoom(chat, b.nick, b.password)
-                }
+                val chat = core.ensureChat(account.id, b.jid, "groupchat", b.name)
+                joinRoomNow(chat, b.nick, b.password)
             }
         }
     }
@@ -1912,15 +1982,24 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             val decrypted = if (omemoReady) {
                 runCatching { omemo?.decryptMamQueryResult(query) }.getOrNull()
             } else null
-            processMam(query.page.forwarded, decrypted)
+            if (chat.isGroup) processGroupMam(chat, query.page.forwarded, decrypted)
+            else processMam(query.page.forwarded, decrypted)
+        }
+
+        suspend fun hasNewMessages(): Boolean = query.page.forwarded.any { f ->
+            val msg = f.forwardedStanza
+            val ref = msg.stanzaId ?: msg.ext("origin-id", Ns.SID)?.getAttributeValue("id")
+            ref.isNullOrBlank() || core.dao.findByRef(chat.id, ref) == null
         }
 
         var pages = 0
-        processPage()
-        pages++
+        if (hasNewMessages()) { processPage(); pages++ }
         while (!query.isComplete && pages < 200) {
             val older = query.pagePrevious(100)
             if (older.isEmpty()) break
+            // Stop as soon as we reach history we already have. A re-sync then fills the
+            // recent gap instead of downloading the entire room archive every time.
+            if (!hasNewMessages()) break
             processPage()
             pages++
         }
@@ -1932,6 +2011,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         if (historyResyncRunning) return "${account.jid}: a re-sync is already running"
         historyResyncRunning = true
         return try {
+            connection?.let { conn ->
+                runCatching { syncPepBookmarks(conn) }
+                runCatching { joinBookmarks() }
+            }
             val chats = core.dao.chatsNow().filter { it.accountId == account.id && it.open }
             if (chats.isEmpty()) return "${account.jid}: no chats to re-sync"
             var synced = 0
@@ -1955,21 +2038,41 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         scope.launch {
             try {
                 val conn = connection ?: return@launch
-                val mam = MamManager.getInstanceFor(conn, JidCreate.from(if (chat.isGroup) chat.jid else account.jid))
+                val archiveJid = if (chat.isGroup) chat.jid else account.jid
+                val mam = MamManager.getInstanceFor(conn, JidCreate.from(archiveJid))
                 val query = mam.queryMostRecentPage(JidCreate.from(chat.jid), 80)
-                val msgs: List<Message> = query.messages
-                for (m in msgs) {
-                    val raw = m.toXML(XmlEnvironment.EMPTY).toString()
-                    if (raw.contains("urn:xmpp:omemo:2")) {
-                        val c = omemo2?.decrypt(m, raw)
-                        if (c != null && !c.empty) {
-                            for (child in c.children) m.addExtension(child)
-                            processMessage(m, directionOverride = null, decryptedBody = c.body,
-                                senderDevice = c.deviceId.toLong(), trust = c.trust, encrypted = "omemo2")
-                        }
-                    } else processMessage(m, directionOverride = null)
-                }
+                val decrypted = if (omemoReady) {
+                    runCatching { omemo?.decryptMamQueryResult(query) }.getOrNull()
+                } else null
+                if (chat.isGroup) processGroupMam(chat, query.page.forwarded, decrypted)
+                else processMam(query.page.forwarded, decrypted)
             } catch (_: Exception) {}
+        }
+    }
+
+    /** MAM results for a room contain the sender nick in the resource, so use the MUC path. */
+    private fun processGroupMam(chat: ChatEntity, forwarded: List<Forwarded<Message>>,
+                                decrypted: List<MessageOrOmemoMessage>?) {
+        val conn = connection ?: return
+        val roomJid = runCatching { JidCreate.entityBareFrom(chat.jid) }.getOrNull() ?: return
+        val muc = rooms[chat.jid]
+            ?: MultiUserChatManager.getInstanceFor(conn).getMultiUserChat(roomJid).also { rooms[chat.jid] = it }
+        val selfNick = chat.ourNick.ifBlank { account.nickname.ifBlank { account.localpart } }
+        forwarded.forEachIndexed { i, f ->
+            val msg = f.forwardedStanza
+            val raw = msg.toXML(XmlEnvironment.EMPTY).toString()
+            if (raw.contains("urn:xmpp:omemo:2")) {
+                val c = omemo2?.decrypt(msg, raw)
+                if (c != null && !c.empty) {
+                    for (child in c.children) msg.addExtension(child)
+                    processGroupMessage(muc, msg, c.body, c.deviceId.toLong(), "omemo2", selfNick)
+                }
+            } else if (decrypted != null && i < decrypted.size && decrypted[i].isOmemoMessage) {
+                val d = decrypted[i].omemoMessage
+                processGroupMessage(muc, msg, d.body, d.senderDevice.deviceId.toLong(), "omemo", selfNick)
+            } else {
+                processGroupMessage(muc, msg, selfNick = selfNick)
+            }
         }
     }
 
