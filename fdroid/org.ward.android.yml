@@ -20,7 +20,7 @@ Repo: https://github.com/Smiley-McSmiles/Ward-Android.git
 Builds:
   - versionName: 1.0.9
     versionCode: 10
-    commit: v1.0.9
+    commit: f067fb8ff1383f3cc3d8e85eca4345f6d8baaaba
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release-unsigned.apk
