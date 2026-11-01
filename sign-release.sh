@@ -16,4 +16,14 @@ creds="${WARD_KEYSTORE_CREDENTIALS:-$HOME/keystores/ward-android-release.txt}"
   --ks-pass "pass:$storepass" --key-pass "pass:$keypass" \
   --out "$out" \
   app/build/outputs/apk/release/app-release-unsigned.apk
+
+expected="${WARD_CERT_SHA256:-782882473f316393e5dba6ea50a658cb4f486dc873836dea09be9e54d109a722}"
+actual="$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$out" 2>/dev/null \
+  | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+if [ "$actual" != "$expected" ]; then
+  echo "ERROR: $out is not signed with the stable Ward release key." >&2
+  echo "       expected $expected" >&2
+  echo "       got      $actual" >&2
+  exit 1
+fi
 echo "$out"
