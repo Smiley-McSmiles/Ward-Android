@@ -956,7 +956,11 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                         }
                     }
                     if (m.retracted > 0) {
-                        Text(if (m.retracted == 1 || m.retracted == 3) "This message was deleted" else "You deleted this message",
+                        Text(when (m.retracted) {
+                            3 -> "Removed by a moderator"
+                            2 -> "You deleted this message"
+                            else -> "This message was deleted"
+                        },
                             fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                     } else {
@@ -1817,6 +1821,13 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
                         onForward: (MessageEntity) -> Unit, onDetails: (MessageEntity) -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     var emojiPicker by remember { mutableStateOf(false) }
+    val occupants = vm.core.session(chat.accountId)?.occupants?.collectAsState()?.value?.get(chat.jid).orEmpty()
+    val moderation = vm.core.session(chat.accountId)?.moderationSupport?.collectAsState()?.value?.get(chat.jid) == true
+    val self = occupants.firstOrNull { it.isSelf }
+    val canModerate = chat.isGroup && moderation &&
+        (self?.role == "moderator" || self?.affiliation == "admin" || self?.affiliation == "owner")
+    val mine = msg.direction == 1 ||
+        (chat.isGroup && chat.ourNick.isNotBlank() && msg.sender.equals(chat.ourNick, ignoreCase = true))
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
@@ -1833,10 +1844,10 @@ fun MessageActionsSheet(vm: AppViewModel, chat: ChatEntity, msg: MessageEntity, 
             HorizontalDivider()
             if (msg.retracted == 0) {
                 SheetAction(Icons.Filled.Reply, "Reply") { onReply(msg) }
-                if (msg.direction == 1 && msg.kind != "file") SheetAction(Icons.Filled.Edit, "Edit") { onEdit(msg) }
+                if (mine && msg.kind != "file") SheetAction(Icons.Filled.Edit, "Edit") { onEdit(msg) }
                 SheetAction(Icons.Filled.ContentCopy, "Copy text") { onCopy(msg) }
                 SheetAction(Icons.Filled.Forward, "Forward") { onForward(msg) }
-                if (msg.direction == 1) SheetAction(Icons.Filled.Delete, "Delete for everyone") {
+                if (mine || canModerate) SheetAction(Icons.Filled.Delete, "Delete for everyone") {
                     if (vm.settings.bool("chats.confirm_delete")) confirmDelete = true else { vm.retract(msg, true); onDismiss() }
                 }
                 SheetAction(Icons.Filled.DeleteOutline, "Delete for me") {

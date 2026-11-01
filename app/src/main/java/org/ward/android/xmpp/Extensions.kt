@@ -1,6 +1,7 @@
 package org.ward.android.xmpp
 
 import org.jivesoftware.smack.packet.ExtensionElement
+import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.Message
 import org.jivesoftware.smack.packet.StandardExtensionElement
 import org.jivesoftware.smack.parsing.StandardExtensionElementProvider
@@ -17,6 +18,7 @@ object Ns {
     const val RETRACT_0 = "urn:xmpp:message-retract:0"
     const val FASTEN = "urn:xmpp:fasten:0"
     const val MODERATE = "urn:xmpp:message-moderate:1"
+    const val MODERATE_0 = "urn:xmpp:message-moderate:0"
     const val RECEIPTS = "urn:xmpp:receipts"
     const val MARKERS = "urn:xmpp:chat-markers:0"
     const val CHATSTATES = "http://jabber.org/protocol/chatstates"
@@ -116,6 +118,32 @@ fun Message.addReplyFallback(length: Int) {
 
 fun Message.addHint(hint: String) = addExtension(RawExtension(hint, Ns.HINTS,
     "<$hint xmlns='${Ns.HINTS}'/>"))
+
+/**
+ * XEP-0425 moderated message retraction. The request is an IQ to the room,
+ * containing the MUC-assigned stanza id of the offending message.
+ */
+class ModerationIq(private val target: String, private val reason: String = "", private val legacy: Boolean = false) :
+    IQ(if (legacy) "apply-to" else "moderate", if (legacy) Ns.FASTEN else Ns.MODERATE) {
+    init {
+        type = IQ.Type.set
+    }
+
+    override fun getIQChildElementBuilder(builder: IQ.IQChildElementXmlStringBuilder): IQ.IQChildElementXmlStringBuilder {
+        builder.attribute("id", target)
+        builder.rightAngleBracket()
+        if (legacy) {
+            builder.append("<moderate xmlns='").append(Ns.MODERATE_0).append("'>")
+                .append("<retract xmlns='").append(Ns.RETRACT_0).append("'/></moderate>")
+        } else {
+            builder.append("<retract xmlns='").append(Ns.RETRACT).append("'/>")
+        }
+        if (reason.isNotBlank()) {
+            builder.append("<reason>").append(esc(reason)).append("</reason>")
+        }
+        return builder
+    }
+}
 
 fun Message.addOriginId(id: String) = addExtension(RawExtension("origin-id", Ns.SID,
     "<origin-id xmlns='${Ns.SID}' id='${esc(id)}'/>"))

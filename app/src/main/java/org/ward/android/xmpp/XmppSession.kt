@@ -124,6 +124,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private val rooms = ConcurrentHashMap<String, MultiUserChat>()
     private val _occupants = MutableStateFlow<Map<String, List<OccupantInfo>>>(emptyMap())
     val occupants: StateFlow<Map<String, List<OccupantInfo>>> = _occupants
+    private val _moderationSupport = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val moderationSupport: StateFlow<Map<String, Boolean>> = _moderationSupport
     private var reconnectDelay = 2000L
     private var mamSynced = false
     private var roster: Roster? = null
@@ -1259,6 +1261,12 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 subject = muc.subject ?: chat.subject, memberCount = muc.occupantsCount)
             core.dao.updateChat(updated)
             updateOccupants(muc, chat)
+            runCatching {
+                val info = ServiceDiscoveryManager.getInstanceFor(conn).discoverInfo(roomJid)
+                val supported = info.containsFeature(Ns.MODERATE) || info.containsFeature(Ns.MODERATE_0)
+                _moderationSupport.value = _moderationSupport.value + (chat.jid to supported)
+                core.addXmlLog(account.id, false, "Message moderation in ${chat.jid}: $supported")
+            }
             // A room joined on another client has no local history yet. Pull the latest room
             // archive page after joining so the group is usable immediately.
             if (core.dao.messagesNow(updated.id, 1).isEmpty()) syncChat(updated)
@@ -1322,27 +1330,31 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                                     senderDevice: Long = 0, encrypted: String = "",
                                     selfNick: String = muc.nickname?.toString().orEmpty()) {
         val roomJid = muc.room.toString()
-        val nick = msg.from?.resourceOrNull?.toString() ?: return
+        val nick = msg.from?.resourceOrNull?.toString()
         val body = decryptedBody ?: msg.body ?: ""
         val stanzaId = msg.stanzaId ?: JidUtil.randomId()
         val timestamp = (msg.getExtension("delay", Ns.DELAY) as? DelayInformation)?.stamp?.time ?: System.currentTimeMillis()
         val reply = msg.ext("reply", Ns.REPLY)
         val target = msg.ext("replace", Ns.CORRECT)?.getAttributeValue("id")
-        val retract = msg.ext("retract", Ns.RETRACT)?.getAttributeValue("id")
+        val retractEl = msg.ext("retract", Ns.RETRACT)
+        val retract = retractEl?.getAttributeValue("id")
         val reactions = msg.ext("reactions", Ns.REACTIONS)
         val attachments = msg.attachments().ifEmpty { attachmentsFromBody(body) }
-        if (body.isBlank() && attachments.isEmpty() && reactions == null && target == null && retract == null) return
+        if (retract == null && body.isBlank() && attachments.isEmpty() && reactions == null && target == null) return
         scope.launch {
             try {
             val chat = core.ensureChat(account.id, roomJid, "groupchat", muc.room.toString().substringBefore('@'))
             if (timestamp <= chat.clearedAt) return@launch
             if (!chat.open) core.dao.updateChat(chat.copy(open = true))
-            if (target != null) {
-                core.findRef(chat.id, target)?.let { core.dao.updateMessage(it.copy(body = body.stripReplyQuote(reply), edited = true)) }
+            if (retract != null) {
+                // XEP-0424/XEP-0425 retractions can come from the room itself (no resource).
+                val moderated = retractEl?.getElements()?.any { it.elementName == "moderated" } == true
+                core.findRef(chat.id, retract)?.let { core.dao.updateMessage(it.copy(retracted = if (moderated) 3 else 1)) }
                 return@launch
             }
-            if (retract != null) {
-                core.findRef(chat.id, retract)?.let { core.dao.updateMessage(it.copy(retracted = 1)) }
+            val senderNick = nick ?: return@launch
+            if (target != null) {
+                core.findRef(chat.id, target)?.let { core.dao.updateMessage(it.copy(body = body.stripReplyQuote(reply), edited = true)) }
                 return@launch
             }
             if (reactions != null) {
@@ -1351,8 +1363,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 val emojis = runCatching { reactions.getElements("reaction", Ns.REACTIONS) }
                     .getOrNull()?.mapNotNull { it.text } ?: emptyList()
                 val list = parseReactions(old.reactionsJson).toMutableList()
-                list.removeAll { it.who == nick }
-                if (emojis.isNotEmpty()) list.add(ReactionSet(emojis, nick, nick == selfNick))
+                list.removeAll { it.who == senderNick }
+                if (emojis.isNotEmpty()) list.add(ReactionSet(emojis, senderNick, senderNick == selfNick))
                 core.dao.updateMessage(old.copy(reactionsJson = gson.toJson(list)))
                 return@launch
             }
@@ -1361,7 +1373,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             val cleanBody = bodyWithoutAttachmentUrls(body, attachments)
             val msgEntity = MessageEntity(chatId = chat.id, stanzaId = stanzaId,
                 originId = msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: "", msgId = msg.stanzaId ?: "",
-                sender = nick, senderJid = occ, senderName = nick, direction = if (nick == selfNick) 1 else 0,
+                sender = senderNick, senderJid = occ, senderName = senderNick, direction = if (senderNick == selfNick) 1 else 0,
                 timestamp = timestamp, body = cleanBody.stripReplyQuote(reply),
                 kind = if (cleanBody.startsWith("/me ")) "me" else if (attachments.isNotEmpty()) "file" else "text",
                 encryption = encrypted, senderDevice = senderDevice, replyTo = reply?.getAttributeValue("id") ?: "",
@@ -1853,6 +1865,31 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                 if (chat.isGroup) rooms[chat.jid]?.sendMessage(msg) else conn.sendStanza(msg)
             }
         }
+    }
+
+    fun isModerator(chat: ChatEntity): Boolean {
+        val self = _occupants.value[chat.jid]?.firstOrNull { it.isSelf } ?: return false
+        return self.role == "moderator" || self.affiliation == "admin" || self.affiliation == "owner"
+    }
+
+    fun supportsModeration(chat: ChatEntity): Boolean = _moderationSupport.value[chat.jid] == true
+
+    /** XEP-0425: ask the room service to retract a message sent by someone else. */
+    suspend fun moderateMessage(chat: ChatEntity, entity: MessageEntity): Boolean {
+        val target = entity.stanzaId.ifBlank { entity.originId }
+        if (target.isBlank()) return false
+        val conn = connection ?: return false
+        suspend fun send(legacy: Boolean): Boolean {
+            val iq = ModerationIq(target, legacy = legacy)
+            iq.to = JidCreate.entityBareFrom(chat.jid)
+            val response = conn.sendIqRequestAndWaitForResponse<IQ>(iq)
+            return response.type != IQ.Type.error
+        }
+        val current = runCatching { send(false) }.getOrDefault(false)
+        if (current) return true
+        return runCatching { send(true) }.onFailure {
+            core.addXmlLog(account.id, false, "Message moderation failed for ${chat.jid}: ${it.message}")
+        }.getOrDefault(false)
     }
 
     fun sendTyping(chat: ChatEntity, state: String) {

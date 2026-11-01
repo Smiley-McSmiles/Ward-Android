@@ -686,8 +686,16 @@ class WardCore private constructor(val context: Context) {
 
     suspend fun retract(chat: ChatEntity, msg: MessageEntity, forEveryone: Boolean) {
         if (forEveryone) {
-            sessions[chat.accountId]?.sendRetraction(chat, msg)
-            dao.updateMessage(msg.copy(retracted = 1))
+            val session = sessions[chat.accountId]
+            val mine = msg.direction == 1 ||
+                (chat.isGroup && chat.ourNick.isNotBlank() && msg.sender.equals(chat.ourNick, ignoreCase = true))
+            if (chat.isGroup && !mine && session?.isModerator(chat) == true && session.supportsModeration(chat)) {
+                // Only mark it retracted if the room accepted the moderation request.
+                if (session.moderateMessage(chat, msg)) dao.updateMessage(msg.copy(retracted = 1))
+            } else {
+                session?.sendRetraction(chat, msg)
+                dao.updateMessage(msg.copy(retracted = 1))
+            }
         } else {
             dao.updateMessage(msg.copy(retracted = 2))
         }
