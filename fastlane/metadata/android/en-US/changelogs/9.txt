@@ -1,0 +1,1 @@
+F-Droid listing update: add phone screenshots and the final store artwork. No functional changes since 1.0.7.

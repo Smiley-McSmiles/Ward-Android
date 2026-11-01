@@ -10,7 +10,7 @@ The matching store listing text, icon, screenshots and changelogs live in
 
 ## Submitting
 
-1. Push the `v1.0.7` tag to GitHub. F-Droid builds the tag, not a branch.
+1. Push the `v1.0.8` tag to GitHub. F-Droid builds the tag, not a branch.
 2. Fork `fdroiddata` and create a branch named `org.ward.android`.
 3. Copy this file to `metadata/org.ward.android.yml` in that fork.
 4. Test it with `fdroid readmeta`, `fdroid rewritemeta org.ward.android`,
