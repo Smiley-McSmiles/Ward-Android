@@ -18,9 +18,9 @@ RepoType: git
 Repo: https://github.com/Smiley-McSmiles/Ward-Android.git
 
 Builds:
-  - versionName: 1.0.9
-    versionCode: 10
-    commit: f067fb8ff1383f3cc3d8e85eca4345f6d8baaaba
+  - versionName: 1.0.8
+    versionCode: 9
+    commit: v1.0.8
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release-unsigned.apk
@@ -28,5 +28,5 @@ Builds:
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[\d.]+$
 UpdateCheckData: app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"([\d.]+)"
-CurrentVersion: 1.0.9
-CurrentVersionCode: 10
+CurrentVersion: 1.0.8
+CurrentVersionCode: 9

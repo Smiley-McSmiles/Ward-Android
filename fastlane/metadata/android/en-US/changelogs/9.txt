@@ -1,1 +1,1 @@
-F-Droid listing update: add phone screenshots and the final store artwork. No functional changes since 1.0.7.
+Group chats bookmarked on another client now appear automatically and are joined. History re-sync is incremental, typing indicators are throttled, and PEP bookmarks sync both ways. Includes the F-Droid store screenshots.

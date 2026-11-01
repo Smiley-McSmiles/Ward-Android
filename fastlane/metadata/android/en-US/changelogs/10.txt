@@ -1,1 +1,0 @@
-Group chats bookmarked on another client now appear automatically and are joined. History re-sync is incremental instead of re-downloading whole archives, and typing indicators are throttled.
