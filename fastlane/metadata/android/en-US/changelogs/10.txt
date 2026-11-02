@@ -1,0 +1,1 @@
+Group moderation for moderators, Delete for everyone for your own group messages, PEP bookmark group sync, incremental history re-sync, throttled typing indicators, and chats no longer disappear when closed or accepted from the request banner.
