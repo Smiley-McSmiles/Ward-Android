@@ -385,14 +385,28 @@ class WardCore private constructor(val context: Context) {
     suspend fun acceptRequest(accountId: Long, jid: String) {
         session(accountId)?.acceptSubscription(jid)
         dao.deleteRequest(accountId, jid)
+        dao.chat(accountId, jid)?.let { dao.updateChat(it.copy(isRequest = false, open = true)) }
     }
     suspend fun declineRequest(accountId: Long, jid: String, block: Boolean = false) {
         session(accountId)?.declineSubscription(jid)
         if (block) blockContact(accountId, jid, true)
         dao.deleteRequest(accountId, jid)
+        dao.chat(accountId, jid)?.let { dao.updateChat(it.copy(isRequest = false, open = false)) }
     }
 
-    suspend fun openChatWith(accountId: Long, jid: String): ChatEntity = ensureChat(accountId, jid)
+    suspend fun openChatWith(accountId: Long, jid: String, type: String = "chat"): ChatEntity {
+        var chat = ensureChat(accountId, jid, type)
+        val request = dao.request(accountId, jid)
+        // A chat can be hidden by open=false (closed) independently of archived. Opening it from a
+        // contact or notification is an explicit request to bring it back. If it still carries
+        // isRequest but the request row is gone, that stale flag would hide it from both the normal
+        // list and the request banner forever; clear it.
+        if (!chat.open || (chat.isRequest && request == null)) {
+            chat = chat.copy(open = true, isRequest = if (request == null) false else chat.isRequest)
+            dao.updateChat(chat)
+        }
+        return chat
+    }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     suspend fun sendFile(chat: ChatEntity, uri: Uri): MessageEntity? {

@@ -73,6 +73,7 @@ interface WardDao {
     @Query("SELECT * FROM receipts WHERE messageId=:id") suspend fun receipts(id: Long): List<ReceiptEntity>
 
     @Query("SELECT * FROM requests ORDER BY createdAt DESC") fun requests(): Flow<List<RequestEntity>>
+    @Query("SELECT * FROM requests WHERE accountId=:accountId AND jid=:jid LIMIT 1") suspend fun request(accountId: Long, jid: String): RequestEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertRequest(r: RequestEntity)
     @Query("DELETE FROM requests WHERE accountId=:accountId AND jid=:jid") suspend fun deleteRequest(accountId: Long, jid: String)
 }

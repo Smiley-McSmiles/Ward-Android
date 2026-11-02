@@ -631,7 +631,7 @@ fun ChatScreen(vm: AppViewModel) {
                         Spacer(Modifier.width(8.dp))
                         Text("${c.displayName} is not in your contacts. Messages from strangers can be spam.",
                             style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { vm.core.scope.launch { vm.core.acceptRequest(c.accountId, c.jid); vm.core.dao.updateChat(c.copy(isRequest = false)) } }) { Text("Accept") }
+                        TextButton(onClick = { vm.core.scope.launch { vm.core.acceptRequest(c.accountId, c.jid) } }) { Text("Accept") }
                         TextButton(onClick = { vm.block(c.accountId, c.jid, true) }) { Text("Block") }
                     }
                 }

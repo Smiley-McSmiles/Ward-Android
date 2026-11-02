@@ -58,7 +58,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun selectChatById(id: Long) = selectChat(id)
 
     fun openChat(accountId: Long, jid: String, type: String = "chat") = viewModelScope.launch {
-        val chat = core.ensureChat(accountId, jid, type)
+        val chat = core.openChatWith(accountId, jid, type)
         selectChat(chat.id)
     }
 
