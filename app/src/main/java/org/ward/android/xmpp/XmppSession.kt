@@ -968,7 +968,8 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     // ============================================================ incoming messages
     private fun processMessage(msg: Message, directionOverride: Int?, decryptedBody: String? = null,
-                               senderDevice: Long = 0, trust: String = "", encrypted: String = "") {
+                               senderDevice: Long = 0, trust: String = "", encrypted: String = "",
+                               timestampOverride: Long? = null) {
         if (!online) return
         val from = msg.from ?: return
         var jid = from.asEntityBareJidIfPossible()?.toString() ?: return
@@ -981,7 +982,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         if (jid == account.jid && msg.to?.asBareJid()?.toString() == account.jid) outgoing = false
         val body = decryptedBody ?: msg.body ?: ""
         val stanzaId = msg.stanzaId ?: msg.ext("origin-id", Ns.SID)?.getAttributeValue("id") ?: JidUtil.randomId()
-        val timestamp = (msg.getExtension("delay", Ns.DELAY) as? DelayInformation)?.stamp?.time
+        // Archived messages carry their delay on the <forwarded> wrapper, not on the inner
+        // stanza, so a re-sync has to pass it in or history is stamped with the sync time.
+        val timestamp = timestampOverride
+            ?: (msg.getExtension("delay", Ns.DELAY) as? DelayInformation)?.stamp?.time
             ?: (msg.getExtension("delay", "urn:xmpp:delay") as? DelayInformation)?.stamp?.time
             ?: System.currentTimeMillis()
         val reply = msg.ext("reply", Ns.REPLY)
@@ -1032,6 +1036,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     }
                 }
             }
+            // Ward for GTK sends this notice instead of a message when the peer has no usable
+            // OMEMO device. Importing them puts a wall of identical text in the chat.
+            if (isClientFallbackNotice(body)) return@launch
             val chatNow = core.dao.chat(chat.id) ?: chat
             if (timestamp <= chatNow.clearedAt) return@launch
             if (!chatNow.open) core.dao.updateChat(chatNow.copy(open = true))
@@ -1985,15 +1992,21 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     scope.launch {
                         for (child in c.children) msg.addExtension(child)
                         processMessage(msg, directionOverride = null, decryptedBody = c.body,
-                            senderDevice = c.deviceId.toLong(), trust = c.trust, encrypted = "omemo2")
+                            senderDevice = c.deviceId.toLong(), trust = c.trust, encrypted = "omemo2",
+                            timestampOverride = delay)
                     }
                 }
             } else if (decrypted != null && i < decrypted.size && decrypted[i].isOmemoMessage) {
                 val d = decrypted[i].omemoMessage
                 processMessage(msg, directionOverride = null, decryptedBody = d.body,
-                    senderDevice = d.senderDevice.deviceId.toLong(), encrypted = "omemo")
+                    senderDevice = d.senderDevice.deviceId.toLong(), encrypted = "omemo", timestampOverride = delay)
+            } else if (msg.ext("encrypted", Ns.OMEMO) != null) {
+                // A legacy OMEMO stanza we could not open for this device. Its body is only the
+                // sender's plaintext fallback ("This message is encrypted with OMEMO..."), so
+                // treating it as a message would fill the chat with that line.
+                return@forEachIndexed
             } else {
-                processMessage(msg, directionOverride = null)
+                processMessage(msg, directionOverride = null, timestampOverride = delay)
             }
         }
     }
