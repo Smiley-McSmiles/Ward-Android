@@ -65,9 +65,11 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     val localPath = a["local"]?.toString()?.takeIf { it.isNotBlank() }
         ?: if (url.startsWith("local://")) url.removePrefix("local://") else null
     val localFile = localPath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
-    var file by remember(url) { mutableStateOf(localFile) }
+    // A finished download stays in the cache, so a re-created row (leaving the chat, coming back
+    // from the home screen) must look it up instead of showing "not downloaded" until a tap.
+    var file by remember(url) { mutableStateOf(localFile ?: vm.core.cachedFile(url)) }
     var failed by remember(url) { mutableStateOf(false) }
-    var loading by remember(url) { mutableStateOf(localFile == null) }
+    var loading by remember(url) { mutableStateOf(localFile == null && file == null) }
     var downloadRequested by remember(url) { mutableStateOf(false) }
     val progressMap by vm.core.downloadProgress.collectAsState()
     val progress = progressMap[url]
@@ -75,7 +77,7 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     val autoLimit = (vm.settings.string("attachments.auto_download", "1024").toIntOrNull() ?: 1024) * 1024L
     val allowUnmetered = vm.settings.bool("attachments.accept_unmetered") &&
         (context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false)
-    val autoDownload = shouldAutoDownload(localFile != null, url.startsWith("local://"), size, autoLimit, allowUnmetered)
+    val autoDownload = shouldAutoDownload(file != null, url.startsWith("local://"), size, autoLimit, allowUnmetered)
     LaunchedEffect(url, downloadRequested) {
         if (file == null && (autoDownload || downloadRequested)) {
             loading = true
