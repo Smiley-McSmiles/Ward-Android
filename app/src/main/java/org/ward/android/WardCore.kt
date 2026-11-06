@@ -561,6 +561,9 @@ class WardCore private constructor(val context: Context) {
         return updated
     }
 
+    /** A finished download that is already in the cache, without starting a transfer. */
+    fun cachedFile(url: String): File? = cachedFileForUrl(File(context.cacheDir, "files"), url)
+
     private fun cachedFileForUrl(cache: File, url: String): File? =
         cache.listFiles()?.firstOrNull {
             it.isFile && org.ward.android.util.FileCrypto.isCompleteCacheFile(it.name, url, it.length())
