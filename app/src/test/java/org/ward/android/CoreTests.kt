@@ -25,6 +25,7 @@ import org.ward.android.xmpp.attachments
 import org.ward.android.xmpp.attachmentsFromBody
 import org.ward.android.xmpp.bodyWithoutAttachmentUrls
 import org.ward.android.xmpp.guessMime
+import org.ward.android.xmpp.isClientFallbackNotice
 import org.ward.android.updates.UpdateCheck
 import java.io.File
 
@@ -107,6 +108,14 @@ class CoreTests {
         assertEquals(1, encrypted.size)
         assertEquals("video/mp4", encrypted[0].mime)
         assertEquals("Clip", bodyWithoutAttachmentUrls("Clip\naesgcm://upload.example.org/clip.mp4.enc#abcdef", encrypted))
+    }
+
+    @Test fun omemoFallbackNoticesAreRecognised() {
+        assertTrue(isClientFallbackNotice(
+            "This message is encrypted with OMEMO. Your app does not support it, or this device was not added."))
+        assertTrue(isClientFallbackNotice("  This message is encrypted with OMEMO. Your app does not support it, or this device was not added.\n"))
+        assertFalse(isClientFallbackNotice("hello"))
+        assertFalse(isClientFallbackNotice(""))
     }
 
     @Test fun updateCheckerComparesDottedVersions() {

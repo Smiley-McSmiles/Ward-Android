@@ -239,6 +239,17 @@ fun guessMime(name: String): String {
     }
 }
 
+/**
+ * Clients that have no usable OMEMO device for the peer (Ward for GTK does this) send a plaintext
+ * notice instead of the message. Keeping them puts a wall of identical text in the chat, which is
+ * what a history re-sync used to drag in for every contact.
+ */
+private val CLIENT_FALLBACK_NOTICES = setOf(
+    "This message is encrypted with OMEMO. Your app does not support it, or this device was not added."
+)
+
+fun isClientFallbackNotice(body: String): Boolean = body.trim() in CLIENT_FALLBACK_NOTICES
+
 /** Remove a media URL from displayed text when that URL is already rendered as an attachment. */
 fun bodyWithoutAttachmentUrls(body: String, attachments: List<ParsedAttachments>): String {
     if (attachments.isEmpty()) return body
