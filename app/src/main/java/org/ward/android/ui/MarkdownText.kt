@@ -92,9 +92,13 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = Mat
                     b.rows.forEachIndexed { i, row ->
                         Row(Modifier.fillMaxWidth()) {
                             row.forEach { cell ->
-                                Text(cell, modifier = Modifier.weight(1f).padding(4.dp).bubbleLongPress(onLongPress),
-                                    fontWeight = if (i == 0) FontWeight.Bold else FontWeight.Normal,
-                                    style = MaterialTheme.typography.bodySmall, color = color)
+                                // Cells go through the inline parser too, so **bold**, *italic* and `code`
+                                // work inside a table instead of showing their markers.
+                                InlineMarkdown(cell, color,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = if (i == 0) FontWeight.Bold else FontWeight.Normal),
+                                    modifier = Modifier.weight(1f).padding(4.dp),
+                                    onLongPress = onLongPress)
                             }
                         }
                         if (i == 0) HorizontalDivider()
