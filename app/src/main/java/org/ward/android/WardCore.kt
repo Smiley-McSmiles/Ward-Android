@@ -188,12 +188,37 @@ class WardCore private constructor(val context: Context) {
      * fetches from PEP first, because the local database can contain devices that were removed
      * from the server months ago (or bundles left behind by a reset).
      */
-    /** Re-sync every open chat from the server archive, optionally for one account. */
+    /**
+     * Force a fresh connection for one account and wait for it to come online. The old session is
+     * torn down, so a stream that Smack still reports as connected cannot hold the sync hostage.
+     */
+    suspend fun forceReconnect(accountId: Long, timeoutMs: Long = 60_000L): Boolean {
+        val acc = dao.account(accountId) ?: return false
+        connectAccount(acc)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (isOnline(accountId)) return true
+            kotlinx.coroutines.delay(500)
+        }
+        return isOnline(accountId)
+    }
+
+    /**
+     * Re-sync every open chat from the server archive, optionally for one account. Each account is
+     * reconnected first, so the sync runs on a fresh stream rather than a stale one.
+     */
     suspend fun resyncHistory(accountId: Long? = null): String {
-        val targets = allSessions().filter { it.online && (accountId == null || it.account.id == accountId) }
-        if (targets.isEmpty()) return "Connect an account first."
+        val accounts = dao.accountsNow().filter { accountId == null || it.id == accountId }
+        if (accounts.isEmpty()) return "No accounts to re-sync."
         val lines = mutableListOf<String>()
-        for (session in targets) lines += session.resyncAllChats()
+        for (acc in accounts) {
+            val online = forceReconnect(acc.id)
+            if (!online) {
+                lines += "${acc.jid}: could not reconnect, so nothing was synced."
+                continue
+            }
+            session(acc.id)?.let { lines += it.resyncAllChats() }
+        }
         return lines.joinToString("\n")
     }
 

@@ -26,6 +26,8 @@ import org.ward.android.xmpp.attachmentsFromBody
 import org.ward.android.xmpp.bodyWithoutAttachmentUrls
 import org.ward.android.xmpp.guessMime
 import org.ward.android.xmpp.isClientFallbackNotice
+import org.ward.android.xmpp.OfflineIncoming
+import org.ward.android.xmpp.offlineIncomingAction
 import org.ward.android.updates.UpdateCheck
 import java.io.File
 
@@ -108,6 +110,13 @@ class CoreTests {
         assertEquals(1, encrypted.size)
         assertEquals("video/mp4", encrypted[0].mime)
         assertEquals("Clip", bodyWithoutAttachmentUrls("Clip\naesgcm://upload.example.org/clip.mp4.enc#abcdef", encrypted))
+    }
+
+    @Test fun incomingStanzaOnLiveStreamRecoversStaleOfflineFlag() {
+        assertEquals(OfflineIncoming.PROCESS, offlineIncomingAction(online = true, connected = true, authenticated = true))
+        assertEquals(OfflineIncoming.RECOVER, offlineIncomingAction(online = false, connected = true, authenticated = true))
+        assertEquals(OfflineIncoming.DROP, offlineIncomingAction(online = false, connected = false, authenticated = true))
+        assertEquals(OfflineIncoming.DROP, offlineIncomingAction(online = false, connected = true, authenticated = false))
     }
 
     @Test fun omemoFallbackNoticesAreRecognised() {
