@@ -608,6 +608,18 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             try {
             if (stanza is Message) {
                 core.addXmlLog(account.id, true, stanza.toXML(XmlEnvironment.EMPTY).toString())
+                if (!online) {
+                    when (offlineIncomingAction(online, conn.isConnected, conn.isAuthenticated)) {
+                        OfflineIncoming.RECOVER -> {
+                            // The stream is up and delivering, so the flag is stale. Trust the stream.
+                            online = true
+                            core.addXmlLog(account.id, false, "Stanza arrived on a live stream while marked offline; marking online")
+                        }
+                        OfflineIncoming.DROP -> core.addXmlLog(account.id, false,
+                            "Dropped incoming stanza from ${stanza.from}: stream is down")
+                        OfflineIncoming.PROCESS -> Unit
+                    }
+                }
                 if (stanza.type != Message.Type.groupchat) {
                     // A carbon copy (XEP-0280) or an archive result (XEP-0313) wraps the real
                     // message. The carbon listener below and syncMam handle the inner message;
@@ -970,7 +982,10 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private fun processMessage(msg: Message, directionOverride: Int?, decryptedBody: String? = null,
                                senderDevice: Long = 0, trust: String = "", encrypted: String = "",
                                timestampOverride: Long? = null) {
-        if (!online) return
+        if (!online) {
+            core.addXmlLog(account.id, false, "Dropped message from ${msg.from}: session is offline")
+            return
+        }
         val from = msg.from ?: return
         var jid = from.asEntityBareJidIfPossible()?.toString() ?: return
         var outgoing = directionOverride == 1 || jid == account.jid

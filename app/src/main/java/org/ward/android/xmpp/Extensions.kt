@@ -278,6 +278,19 @@ private val CLIENT_FALLBACK_NOTICES = setOf(
 
 fun isClientFallbackNotice(body: String): Boolean = body.trim() in CLIENT_FALLBACK_NOTICES
 
+/** What to do with an incoming stanza when the session's own "online" flag may have drifted. */
+enum class OfflineIncoming { PROCESS, RECOVER, DROP }
+
+/**
+ * A stanza arriving on a stream that is still up means the session is online, even if the flag
+ * says otherwise. Only when the stream itself is gone is the stanza genuinely undeliverable.
+ */
+fun offlineIncomingAction(online: Boolean, connected: Boolean, authenticated: Boolean): OfflineIncoming = when {
+    online -> OfflineIncoming.PROCESS
+    connected && authenticated -> OfflineIncoming.RECOVER
+    else -> OfflineIncoming.DROP
+}
+
 /** Remove a media URL from displayed text when that URL is already rendered as an attachment. */
 fun bodyWithoutAttachmentUrls(body: String, attachments: List<ParsedAttachments>): String {
     if (attachments.isEmpty()) return body
