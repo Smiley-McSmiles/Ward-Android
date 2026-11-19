@@ -53,25 +53,34 @@ class CallSounds(private val context: Context, private val settings: SettingsSto
         val choice = settings.string(key, "ward")
         if (choice == "none") return
         runCatching {
-            val created = if (choice == "system") {
+            if (choice == "system") {
                 val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                if (uri == null) bundled(incoming) else MediaPlayer().apply {
-                    setDataSource(context, uri)
-                    setAudioAttributes(android.media.AudioAttributes.Builder()
+                if (uri == null) {
+                    player = bundled(incoming)
+                } else {
+                    val mp = MediaPlayer()
+                    player = mp
+                    mp.setDataSource(context, uri)
+                    mp.setAudioAttributes(android.media.AudioAttributes.Builder()
                         .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                         .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-                    prepare()
-                    isLooping = false
-                    start()
+                    mp.setOnCompletionListener { it.release(); if (player === it) player = null }
+                    mp.setOnErrorListener { p, _, _ -> p.release(); if (player === p) player = null; true }
+                    mp.prepare()
+                    mp.isLooping = false
+                    mp.start()
                 }
-            } else bundled(incoming)
-            player = created
+            } else {
+                player = bundled(incoming)
+            }
         }.onFailure { release() }
     }
 
     private fun bundled(isIncoming: Boolean): MediaPlayer? = MediaPlayer.create(context,
         if (isIncoming) R.raw.phone_incoming_call else R.raw.phone_outgoing_calling)?.apply {
         isLooping = false
+        setOnCompletionListener { it.release(); if (player === it) player = null }
+        setOnErrorListener { p, _, _ -> p.release(); if (player === p) player = null; true }
         start()
     }
 }

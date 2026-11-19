@@ -106,7 +106,15 @@ class AdminService(private val connection: XMPPConnection, private val domain: S
     private fun buildSubmit(step: AdminStep, values: Map<String, List<String>>): DataForm {
         val b = DataForm.builder(DataForm.Type.submit)
         for (f in step.fields) {
-            if (f.type == "fixed" || f.type == "hidden") continue
+            if (f.type == "fixed") continue
+            if (f.type == "hidden") {
+                if (f.varName != "FORM_TYPE" && f.values.isNotEmpty()) {
+                    val hb = FormField.hiddenBuilder(f.varName)
+                    f.values.forEach { hb.addValue(it) }
+                    b.addField(hb.build())
+                }
+                continue
+            }
             val vals = values[f.varName] ?: f.values
             val field: FormField = when (f.type) {
                 "boolean" -> FormField.booleanBuilder(f.varName).setLabel(f.label).setDescription(f.desc)

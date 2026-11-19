@@ -119,7 +119,7 @@ fun WardApp(vm: AppViewModel) {
     val settingsState by vm.settings.state.collectAsState()
     val runInBackground = settingsState["general.background"] != "false"
     val currentCall by vm.core.call.collectAsState()
-    val callSounds = remember { CallSounds(context, vm.settings) }
+    val callSounds = remember { CallSounds(context.applicationContext, vm.settings) }
     val ringingIncoming = currentCall?.phase == "INCOMING"
     val ringingOutgoing = currentCall?.let { it.phase in listOf("OUTGOING", "RINGING") && !it.incoming } == true
     DisposableEffect(currentCall?.sessionId, ringingIncoming, ringingOutgoing) {
@@ -138,7 +138,8 @@ fun WardApp(vm: AppViewModel) {
     // one, so a chat request can arrive while the UI is already composed.
     val pendingChatId by MainActivity.pendingChatId.collectAsState()
     val pendingJid by MainActivity.pendingJid.collectAsState()
-    LaunchedEffect(pendingChatId, pendingJid, accounts.size) {
+    LaunchedEffect(pendingChatId, pendingJid, accounts.size, unlocked) {
+        if (!unlocked) return@LaunchedEffect
         val account = accounts.firstOrNull() ?: return@LaunchedEffect
         val jid = pendingJid
         if (jid != null) {

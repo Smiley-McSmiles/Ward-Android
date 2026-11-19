@@ -100,6 +100,7 @@ object TimeUtil {
 
 object SecretStore {
     private const val ALIAS = "ward_password_key"
+    @Synchronized
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }

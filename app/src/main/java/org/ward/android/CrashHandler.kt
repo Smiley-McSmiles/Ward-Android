@@ -5,6 +5,7 @@ import android.content.Context
 object CrashHandler {
     private const val FILE = "last_crash.txt"
     fun install(context: Context) {
+        val appContext = context.applicationContext
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
@@ -13,7 +14,7 @@ object CrashHandler {
                 sw.append(thread.name).append("\n\n")
                 throwable.printStackTrace(java.io.PrintWriter(sw))
                 val text = sw.toString()
-                context.openFileOutput(FILE, Context.MODE_PRIVATE).use { it.write(text.toByteArray()) }
+                appContext.openFileOutput(FILE, Context.MODE_PRIVATE).use { it.write(text.toByteArray()) }
             }
             previous?.uncaughtException(thread, throwable)
         }

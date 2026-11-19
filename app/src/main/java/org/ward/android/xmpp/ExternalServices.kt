@@ -42,8 +42,14 @@ class ExternalServicesIq(private val raw: String = "") : IQ("services", NS) {
         val open = raw.substringAfter('<')
         val attrs = open.substringBefore('>')
         val inner = raw.substringAfter('>').substringBeforeLast("</services>")
-        Regex("([a-z]+)=['\"]([^'\"]*)['\"]").findAll(attrs).forEach { m ->
-            if (m.groupValues[1] != "xmlns") builder.attribute(m.groupValues[1], m.groupValues[2])
+        Regex("([a-zA-Z0-9_-]+)=['\"]([^'\"]*)['\"]").findAll(attrs).forEach { m ->
+            if (m.groupValues[1] != "xmlns") {
+                val unescaped = m.groupValues[2]
+                    .replace("&lt;", "<").replace("&gt;", ">")
+                    .replace("&quot;", "\"").replace("&apos;", "'")
+                    .replace("&amp;", "&")
+                builder.attribute(m.groupValues[1], unescaped)
+            }
         }
         builder.rightAngleBracket()
         builder.append(inner)

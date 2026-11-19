@@ -30,8 +30,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlin.math.min
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.ward.android.WardCore
 import org.ward.android.util.AppLockStore
 
@@ -52,8 +54,10 @@ fun AppUnlockScreen(context: android.content.Context, onUnlocked: () -> Unit) {
         }
     }
 
+    var verifying by remember { mutableStateOf(false) }
+
     fun attempt(secret: String) {
-        if (wiping) return
+        if (wiping || verifying) return
         if (remaining > 0L) {
             error = "Try again in $remaining seconds"
             return
@@ -62,30 +66,34 @@ fun AppUnlockScreen(context: android.content.Context, onUnlocked: () -> Unit) {
             error = "Enter your ${if (type == AppLockStore.PIN) "PIN" else if (type == AppLockStore.PATTERN) "pattern" else "password"}"
             return
         }
-        if (AppLockStore.verify(context, secret)) {
-            AppLockStore.clearFailures(context)
-            value = ""
-            pattern = emptyList()
-            error = ""
-            onUnlocked()
-            return
-        }
-        val failure = AppLockStore.recordFailure(context)
-        remaining = AppLockStore.lockoutRemaining(context) / 1000L
-        if (type == AppLockStore.PATTERN) pattern = emptyList()
-        if (failure.wipe) {
-            wiping = true
-            error = "Too many failed attempts. Removing local keys and message history…"
-            scope.launch {
+        verifying = true
+        scope.launch {
+            val ok = withContext(Dispatchers.Default) { AppLockStore.verify(context, secret) }
+            if (ok) {
+                withContext(Dispatchers.IO) { AppLockStore.clearFailures(context) }
+                value = ""
+                pattern = emptyList()
+                error = ""
+                verifying = false
+                onUnlocked()
+                return@launch
+            }
+            val failure = withContext(Dispatchers.IO) { AppLockStore.recordFailure(context) }
+            remaining = AppLockStore.lockoutRemaining(context) / 1000L
+            if (type == AppLockStore.PATTERN) pattern = emptyList()
+            if (failure.wipe) {
+                wiping = true
+                error = "Too many failed attempts. Removing local keys and message history…"
                 runCatching { WardCore.get().wipeEncryptionAndHistory() }
-                AppLockStore.clearFailures(context)
+                withContext(Dispatchers.IO) { AppLockStore.clearFailures(context) }
                 error = "Too many failed attempts. Local encryption keys and message history were deleted."
                 wiping = false
+            } else {
+                val limit = AppLockStore.maxAttempts(context)
+                error = "Incorrect ${if (type == AppLockStore.PIN) "PIN" else if (type == AppLockStore.PATTERN) "pattern" else "password"}" +
+                    if (limit > 0) " · ${failure.attempts} of $limit attempts" else ""
             }
-        } else {
-            val limit = AppLockStore.maxAttempts(context)
-            error = "Incorrect ${if (type == AppLockStore.PIN) "PIN" else if (type == AppLockStore.PATTERN) "pattern" else "password"}" +
-                if (limit > 0) " · ${failure.attempts} of $limit attempts" else ""
+            verifying = false
         }
     }
 
@@ -159,11 +167,17 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var currentType by remember { mutableStateOf(AppLockStore.type(context)) }
     var setupType by remember { mutableStateOf<String?>(null) }
+    var pendingVerifiedAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var maxAttempts by remember { mutableStateOf(AppLockStore.maxAttempts(context)) }
     var lockoutSeconds by remember { mutableStateOf(AppLockStore.lockoutSeconds(context)) }
     var lockDelaySeconds by remember { mutableStateOf(AppLockStore.lockDelaySeconds(context)) }
     val settings by vm.settings.state.collectAsState()
     val blockScreenshots = settings["security.block_screenshots"] == "true"
+
+    fun requireCurrentVerification(action: () -> Unit) {
+        if (currentType == AppLockStore.OFF) action()
+        else pendingVerifiedAction = action
+    }
 
     BackHandler { onBack() }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
@@ -204,10 +218,14 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                         ).forEach { (value, label) ->
                             FilterChip(selected = currentType == value, onClick = {
                                 if (value == AppLockStore.OFF) {
-                                    AppLockStore.clear(context)
-                                    currentType = AppLockStore.OFF
+                                    if (currentType != AppLockStore.OFF) {
+                                        requireCurrentVerification {
+                                            AppLockStore.clear(context)
+                                            currentType = AppLockStore.OFF
+                                        }
+                                    }
                                 } else {
-                                    setupType = value
+                                    requireCurrentVerification { setupType = value }
                                 }
                             }, label = { Text(label) })
                         }
@@ -244,9 +262,13 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(0 to "Never", 3 to "3 attempts", 5 to "5 attempts", 10 to "10 attempts").forEach { (value, label) ->
                             FilterChip(selected = maxAttempts == value, onClick = {
-                                maxAttempts = value
-                                AppLockStore.setMaxAttempts(context, value)
-                                AppLockStore.clearFailures(context)
+                                if (value != maxAttempts) {
+                                    requireCurrentVerification {
+                                        maxAttempts = value
+                                        AppLockStore.setMaxAttempts(context, value)
+                                        AppLockStore.clearFailures(context)
+                                    }
+                                }
                             }, label = { Text(label) })
                         }
                     }
@@ -267,9 +289,13 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(0 to "Off", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes", 900 to "15 minutes").forEach { (value, label) ->
                             FilterChip(selected = lockoutSeconds == value, onClick = {
-                                lockoutSeconds = value
-                                AppLockStore.setLockoutSeconds(context, value)
-                                AppLockStore.clearFailures(context)
+                                if (value != lockoutSeconds) {
+                                    requireCurrentVerification {
+                                        lockoutSeconds = value
+                                        AppLockStore.setLockoutSeconds(context, value)
+                                        AppLockStore.clearFailures(context)
+                                    }
+                                }
                             }, label = { Text(label) })
                         }
                     }
@@ -285,8 +311,12 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(0 to "Immediately", 15 to "15 seconds", 30 to "30 seconds", 60 to "1 minute", 300 to "5 minutes").forEach { (value, label) ->
                             FilterChip(selected = lockDelaySeconds == value, onClick = {
-                                lockDelaySeconds = value
-                                AppLockStore.setLockDelaySeconds(context, value)
+                                if (value != lockDelaySeconds) {
+                                    requireCurrentVerification {
+                                        lockDelaySeconds = value
+                                        AppLockStore.setLockDelaySeconds(context, value)
+                                    }
+                                }
                             }, label = { Text(label) })
                         }
                     }
@@ -302,6 +332,90 @@ fun SecurityPage(vm: AppViewModel, onBack: () -> Unit) {
             setupType = null
         })
     }
+
+    val pending = pendingVerifiedAction
+    if (pending != null) {
+        VerifyAppLockDialog(
+            context = context,
+            type = currentType,
+            onDismiss = { pendingVerifiedAction = null },
+            onVerified = {
+                pendingVerifiedAction = null
+                pending()
+            }
+        )
+    }
+}
+
+@Composable
+private fun VerifyAppLockDialog(
+    context: android.content.Context,
+    type: String,
+    onDismiss: () -> Unit,
+    onVerified: () -> Unit
+) {
+    var value by remember { mutableStateOf("") }
+    var pattern by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val isPattern = type == AppLockStore.PATTERN
+
+    fun submit() {
+        if (busy) return
+        val secret = if (isPattern) {
+            if (pattern.size < 4) { error = "Use at least four dots"; return }
+            pattern.joinToString("-")
+        } else {
+            if (value.isBlank()) { error = "Enter your current credential"; return }
+            value
+        }
+        busy = true
+        scope.launch {
+            val ok = withContext(Dispatchers.Default) { AppLockStore.verify(context, secret) }
+            busy = false
+            if (ok) onVerified()
+            else {
+                if (isPattern) pattern = emptyList()
+                error = "Incorrect ${if (type == AppLockStore.PIN) "PIN" else if (isPattern) "pattern" else "password"}"
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Confirm current lock") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (isPattern) {
+                    PatternPad(pattern, { pattern = it; error = "" }, enabled = !busy)
+                } else {
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = {
+                            value = if (type == AppLockStore.PIN) it.filter { c -> c.isDigit() }.take(12) else it
+                            error = ""
+                        },
+                        label = { Text(if (type == AppLockStore.PIN) "Current PIN" else "Current password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = if (type == AppLockStore.PIN) KeyboardType.NumberPassword else KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
+                        singleLine = true,
+                        enabled = !busy
+                    )
+                }
+                if (error.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = ::submit, enabled = !busy) { Text("Verify") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } }
+    )
 }
 
 @Composable

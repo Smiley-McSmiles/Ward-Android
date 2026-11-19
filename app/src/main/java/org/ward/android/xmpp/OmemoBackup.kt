@@ -214,7 +214,7 @@ object OmemoBackup {
         out["/ikp/is_seed"] = "false"
         out["/ikp/key"] = jsonString(b64url(identity))
         out["/own_device_id"] = gson.toJson(deviceId)
-        out["/devices/$account.jid/list"] = gson.toJson(listOf(deviceId))
+        out["/devices/${account.jid}/list"] = gson.toJson(listOf(deviceId))
         out["/devices/${account.jid}/$deviceId/identity_key"] = jsonString(b64url(identityEd))
         out["/devices/${account.jid}/$deviceId/namespaces"] = gson.toJson(listOf(GTK_OMEMO2, GTK_LEGACY))
         out["/devices/${account.jid}/$deviceId/active"] = gson.toJson(mapOf(GTK_OMEMO2 to true, GTK_LEGACY to true))
@@ -456,10 +456,10 @@ object OmemoBackup {
         val root = File(core.context.filesDir, "omemo")
         val accountFiles = legacyFiles(core, account).keys
         for (rel in accountFiles) runCatching { File(root, rel).delete() }
+        val rootPath = root.canonicalFile.toPath()
         for ((rel, value) in legacy.entrySet()) {
-            val target = File(root, rel)
-            val safe = target.canonicalPath.startsWith(root.canonicalPath)
-            if (!safe) continue
+            val target = File(root, rel).canonicalFile
+            if (!target.toPath().startsWith(rootPath) || target == root.canonicalFile) continue
             target.parentFile?.mkdirs()
             target.writeBytes(Base64.getDecoder().decode(value.asString))
         }
@@ -468,9 +468,12 @@ object OmemoBackup {
     private fun legacyFiles(core: WardCore, account: AccountEntity): Map<String, ByteArray> {
         val root = File(core.context.filesDir, "omemo")
         if (!root.isDirectory) return emptyMap()
-        val needle = account.localpart
+        val jidToken = account.jid.lowercase()
+        val prefix = "${account.localpart.lowercase()}@"
         return root.walkTopDown().filter { file ->
-            file.isFile && (file.path.contains(needle) || file.path.contains(account.jid))
+            if (!file.isFile) return@filter false
+            val rel = root.toPath().relativize(file.toPath()).toString().lowercase()
+            rel.split('/', '\\').any { seg -> seg == jidToken || seg.startsWith(prefix) }
         }.associate { file ->
             root.toPath().relativize(file.toPath()).toString() to file.readBytes()
         }

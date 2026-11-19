@@ -45,18 +45,25 @@ object ScheduledSendStore {
         }.getOrDefault(emptyList())
     }
 
+    private val lock = Any()
+
     fun add(context: Context, message: ScheduledMessage) {
-        val next = all(context).filterNot { it.id == message.id } + message
-        save(context, next)
+        synchronized(lock) {
+            val next = all(context).filterNot { it.id == message.id } + message
+            save(context, next, commit = false)
+        }
         schedule(context, message)
     }
 
-    fun remove(context: Context, id: String) {
-        save(context, all(context).filterNot { it.id == id })
+    fun remove(context: Context, id: String, commit: Boolean = false) {
+        synchronized(lock) {
+            save(context, all(context).filterNot { it.id == id }, commit = commit)
+        }
     }
 
-    private fun save(context: Context, messages: List<ScheduledMessage>) {
-        prefs(context).edit().putString(KEY, gson.toJson(messages)).apply()
+    private fun save(context: Context, messages: List<ScheduledMessage>, commit: Boolean = false) {
+        val editor = prefs(context).edit().putString(KEY, gson.toJson(messages))
+        if (commit) editor.commit() else editor.apply()
     }
 
     fun rescheduleAll(context: Context) {
@@ -66,6 +73,7 @@ object ScheduledSendStore {
     private fun schedule(context: Context, message: ScheduledMessage) {
         val alarm = context.getSystemService(AlarmManager::class.java) ?: return
         val intent = Intent(context, ScheduledSendReceiver::class.java)
+            .setData(android.net.Uri.parse("ward://scheduled/${message.id}"))
             .putExtra(ScheduledSendReceiver.EXTRA_ID, message.id)
         val pending = PendingIntent.getBroadcast(context, message.id.hashCode(), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -82,7 +90,7 @@ object ScheduledSendStore {
         val chat = core.dao.chat(message.chatId)
         val account = core.dao.account(message.accountId)
         if (chat == null || account == null) {
-            remove(context, id)
+            remove(context, id, commit = true)
             return false
         }
         if (!core.isOnline(message.accountId)) {
@@ -96,15 +104,19 @@ object ScheduledSendStore {
         }
         if (!core.isOnline(message.accountId)) {
             if (message.attempts + 1 >= MAX_ATTEMPTS) {
-                remove(context, id)
+                remove(context, id, commit = true)
             } else {
-                add(context, message.copy(at = System.currentTimeMillis() + 120_000L,
-                    attempts = message.attempts + 1))
+                val updated = message.copy(at = System.currentTimeMillis() + 120_000L, attempts = message.attempts + 1)
+                synchronized(lock) {
+                    val next = all(context).filterNot { it.id == updated.id } + updated
+                    save(context, next, commit = true)
+                }
+                schedule(context, updated)
             }
             return false
         }
         core.sendText(chat, message.text, null)
-        remove(context, id)
+        remove(context, id, commit = true)
         return true
     }
 }

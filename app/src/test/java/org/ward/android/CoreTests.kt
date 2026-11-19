@@ -292,4 +292,45 @@ class CoreTests {
         val decrypted = OpenPgp.decrypt(bob, listOf(alicePublic), encrypted)
         assertEquals(String(plain), String(decrypted))
     }
+
+    @Test fun openPgpRejectsUntrustedSignature() {
+        val alice = org.pgpainless.PGPainless.generateKeyRing().modernKeyRing("xmpp:alice@example.org", null as String?)
+        val bob = org.pgpainless.PGPainless.generateKeyRing().modernKeyRing("xmpp:bob@example.org", null as String?)
+        val bobPublic = OpenPgp.parsePublic(OpenPgp.publicArmor(bob))!!
+        val encrypted = OpenPgp.encrypt(alice, listOf(bobPublic), "<signcrypt/>".toByteArray())
+        try {
+            OpenPgp.decrypt(bob, emptyList(), encrypted)
+            fail("Expected SecurityException when verification cert is missing")
+        } catch (_: SecurityException) { }
+    }
+
+    @Test fun lexConfigTrailingBackslashDoesNotCrash() {
+        val palette = HighlightPalette(
+            plain = Color.Black, keyword = Color.Red, string = Color.Green, comment = Color.Gray,
+            number = Color.Yellow, function = Color.Blue, type = Color.Cyan,
+            tag = Color.Magenta, attribute = Color.DarkGray, punctuation = Color.LightGray
+        )
+        val result = highlightCode("key: \"\\", "yaml", palette)
+        assertEquals("key: \"\\", result.text)
+    }
+
+    @Test fun escEscapesSingleQuotes() {
+        assertEquals("a&apos;b&quot;c&lt;d&gt;&amp;e", org.ward.android.xmpp.esc("a'b\"c<d>&e"))
+    }
+
+    @Test fun fileCryptoDecryptDeletesOutputOnBadTag() {
+        val dir = kotlin.io.path.createTempDirectory().toFile()
+        val src = File(dir, "secret.txt").apply { writeText("sensitive data") }
+        val enc = File(dir, "secret.enc")
+        val (key, iv) = FileCrypto.encrypt(src, enc)
+        val bytes = enc.readBytes()
+        bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0xFF).toByte()
+        enc.writeBytes(bytes)
+        val out = File(dir, "secret.out")
+        try {
+            FileCrypto.decrypt(enc, out, key, iv)
+            fail("Expected AEADBadTagException")
+        } catch (_: Exception) { }
+        assertFalse("Unauthenticated output file must be deleted", out.exists())
+    }
 }

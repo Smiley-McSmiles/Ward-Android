@@ -604,7 +604,9 @@ private fun lexConfig(code: String, s: Styles): AnnotatedString {
                 }
                 c == '"' || c == '\'' -> {
                     var k = p + 1
-                    while (k < end && code[k] != c) { if (code[k] == '\\') k++; k++ }
+                    while (k < end && code[k] != c) {
+                        if (code[k] == '\\' && k + 1 < end) k += 2 else k++
+                    }
                     val qe = if (k < end) k + 1 else k
                     b.appendStyled(code.substring(p, qe), s.string); p = qe
                 }

@@ -31,13 +31,14 @@ class CallManager(private val session: XmppSession) {
     }
     private val context: Context get() = session.core.context
     private val handler = Handler(Looper.getMainLooper())
-    private val executor = Executors.newSingleThreadExecutor()
+    private val candidateLock = Any()
     private var factory: PeerConnectionFactory? = null
     private var eglBase: EglBase? = null
     private var peer: PeerConnection? = null
     private var audioTrack: AudioTrack? = null
     private var videoTrack: VideoTrack? = null
     private var videoCapturer: CameraVideoCapturer? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var localRenderer: SurfaceViewRenderer? = null
     private var remoteRenderer: SurfaceViewRenderer? = null
     private var pendingCandidates = mutableListOf<IceCandidate>()
@@ -59,6 +60,7 @@ class CallManager(private val session: XmppSession) {
     @Volatile private var discoveryStarted = false
     @Volatile private var discoveryDone = false
     private var connectTimeout: Runnable? = null
+    private var initialJingleRunnable: Runnable? = null
     private val gatheredCandidateTypes = mutableSetOf<String>()
     private val receivedCandidateTypes = mutableSetOf<String>()
 
@@ -335,7 +337,7 @@ class CallManager(private val session: XmppSession) {
                 }
                 peer?.setRemoteDescription(object : SimpleSdpObserver("remote", ::fail) {
                     override fun onSetSuccess() {
-                        remoteSet = true
+                        synchronized(candidateLock) { remoteSet = true }
                         flushCandidates()
                     }
                 }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
@@ -352,7 +354,7 @@ class CallManager(private val session: XmppSession) {
             return
         }
         answering = false
-        remoteSet = false
+        synchronized(candidateLock) { remoteSet = false }
         pc.createOffer(object : SimpleSdpObserver("offer", ::fail) {
             override fun onCreateSuccess(sdp: SessionDescription) {
                 pc.setLocalDescription(object : SimpleSdpObserver("local-offer", ::fail) {
@@ -375,7 +377,7 @@ class CallManager(private val session: XmppSession) {
         answering = true
         pc.setRemoteDescription(object : SimpleSdpObserver("remote-offer", ::fail) {
             override fun onSetSuccess() {
-                remoteSet = true
+                synchronized(candidateLock) { remoteSet = true }
                 flushCandidates()
                 pc.createAnswer(object : SimpleSdpObserver("answer", ::fail) {
                     override fun onCreateSuccess(answer: SessionDescription) {
@@ -391,9 +393,9 @@ class CallManager(private val session: XmppSession) {
     private fun scheduleInitialJingle(action: String, type: SessionDescription.Type) {
         if (gatherScheduled) return
         gatherScheduled = true
-        handler.postDelayed({
-            val pc = peer ?: return@postDelayed
-            val local = pc.localDescription ?: return@postDelayed
+        val task = Runnable {
+            val pc = peer ?: return@Runnable
+            val local = pc.localDescription ?: return@Runnable
             val xml = JingleSdp.sdpToJingle(local.description, sid, action,
                 if (initiatorJid.isBlank()) (session.connection?.user?.toString() ?: session.account.jid) else initiatorJid,
                 if (action == "session-accept") (session.connection?.user?.toString() ?: session.account.jid) else null)
@@ -406,9 +408,11 @@ class CallManager(private val session: XmppSession) {
                     }
                 }
             }
-            canSendCandidates = true
+            synchronized(candidateLock) { canSendCandidates = true }
             flushLocalCandidates()
-        }, 1500)
+        }
+        initialJingleRunnable = task
+        handler.postDelayed(task, 1500)
     }
 
     private fun sendJingle(action: String, offer: String?, type: SessionDescription.Type?) {
@@ -423,11 +427,20 @@ class CallManager(private val session: XmppSession) {
         session.connection?.sendStanza(iq)
     }
 
+    private fun safeXmlDoc(xml: String): org.w3c.dom.Document? = runCatching {
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            isXIncludeAware = false
+            isExpandEntityReferences = false
+        }.newDocumentBuilder().parse(java.io.ByteArrayInputStream(xml.toByteArray()))
+    }.getOrNull()
+
     private fun addCandidates(xml: String) {
-        val doc = runCatching {
-            javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
-                .newDocumentBuilder().parse(java.io.ByteArrayInputStream(xml.toByteArray()))
-        }.getOrNull() ?: return
+        val doc = safeXmlDoc(xml) ?: return
         val contents = doc.getElementsByTagNameNS(JingleSdp.NS_JINGLE, "content")
         for (ci in 0 until contents.length) {
             val content = contents.item(ci) as org.w3c.dom.Element
@@ -442,7 +455,10 @@ class CallManager(private val session: XmppSession) {
                     }
                 }
                 val c = IceCandidate(mid, 0, "candidate:${e.getAttribute("foundation")} ${e.getAttribute("component").ifBlank { "1" }} ${e.getAttribute("protocol").ifBlank { "udp" }} ${e.getAttribute("priority")} ${e.getAttribute("ip")} ${e.getAttribute("port")} typ $kind")
-                if (remoteSet) peer?.addIceCandidate(c) else pendingCandidates.add(c)
+                val ready = synchronized(candidateLock) {
+                    if (remoteSet) true else { pendingCandidates.add(c); false }
+                }
+                if (ready) peer?.addIceCandidate(c)
             }
         }
     }
@@ -453,20 +469,24 @@ class CallManager(private val session: XmppSession) {
         if (parts.size < 8) return
         val content = candidate.sdpMid?.toString() ?: "0"
         val xml = "<jingle xmlns='${JingleSdp.NS_JINGLE}' action='transport-info' sid='${esc(sid)}' initiator='${esc(initiatorJid)}'>" +
-            "<content name='${esc(content)}'><transport xmlns='${JingleSdp.NS_ICE}'><candidate component='${parts[1]}' foundation='${esc(parts[0])}' generation='0' id='${esc(parts[0])}${parts[1]}' ip='${esc(parts[4])}' network='0' port='${parts[5]}' priority='${parts[3]}' protocol='${esc(parts[2])}' type='${esc(parts[7])}'/></transport></content></jingle>"
+            "<content name='${esc(content)}'><transport xmlns='${JingleSdp.NS_ICE}'><candidate component='${esc(parts[1])}' foundation='${esc(parts[0])}' generation='0' id='${esc(parts[0])}${esc(parts[1])}' ip='${esc(parts[4])}' network='0' port='${esc(parts[5])}' priority='${esc(parts[3])}' protocol='${esc(parts[2])}' type='${esc(parts[7])}'/></transport></content></jingle>"
         sendJingleRaw("transport-info", xml)
     }
 
     private fun flushLocalCandidates() {
-        if (!canSendCandidates) return
-        for (c in localCandidates) sendCandidate(c)
-        localCandidates.clear()
+        val toSend = synchronized(candidateLock) {
+            if (!canSendCandidates) return
+            localCandidates.toList().also { localCandidates.clear() }
+        }
+        for (c in toSend) sendCandidate(c)
     }
 
     private fun flushCandidates() {
-        if (!remoteSet) return
-        for (c in pendingCandidates) peer?.addIceCandidate(c)
-        pendingCandidates.clear()
+        val toAdd = synchronized(candidateLock) {
+            if (!remoteSet) return
+            pendingCandidates.toList().also { pendingCandidates.clear() }
+        }
+        for (c in toAdd) peer?.addIceCandidate(c)
     }
 
     private fun armConnectTimeout() {
@@ -551,10 +571,7 @@ class CallManager(private val session: XmppSession) {
     }
 
     private fun parseExternalServices(xml: String): List<PeerConnection.IceServer> {
-        val doc = runCatching {
-            javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
-                .newDocumentBuilder().parse(java.io.ByteArrayInputStream(xml.toByteArray()))
-        }.getOrNull() ?: return emptyList()
+        val doc = safeXmlDoc(xml) ?: return emptyList()
         val out = mutableListOf<PeerConnection.IceServer>()
         val services = doc.getElementsByTagNameNS(ExternalServicesIq.NS, "service")
         for (i in 0 until services.length) {
@@ -701,8 +718,10 @@ class CallManager(private val session: XmppSession) {
                             "Gathered ICE candidate: $kind (${parts[2]})")
                     }
                 }
-                if (!canSendCandidates) { localCandidates.add(candidate); return }
-                sendCandidate(candidate)
+                val ready = synchronized(candidateLock) {
+                    if (canSendCandidates) true else { localCandidates.add(candidate); false }
+                }
+                if (ready) sendCandidate(candidate)
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onAddStream(stream: MediaStream) { attachRemoteTracks(stream) }
@@ -730,6 +749,7 @@ class CallManager(private val session: XmppSession) {
             val name = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) } ?: enumerator.deviceNames.firstOrNull() ?: return
             val capturer = enumerator.createCapturer(name, null) ?: return
             val helper = SurfaceTextureHelper.create("WardCapture", eglBase!!.eglBaseContext)
+            surfaceTextureHelper = helper
             val source = f.createVideoSource(capturer.isScreencast)
             capturer.initialize(helper, context, source.capturerObserver)
             capturer.startCapture(640, 480, 30)
@@ -738,7 +758,9 @@ class CallManager(private val session: XmppSession) {
                 pc.addTrack(it, listOf("ward"))
                 localRenderer?.let { r -> it.addSink(r) }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            session.core.addXmlLog(session.account.id, false, "WebRTC attachVideo failed: ${e.message}")
+        }
     }
 
     private fun attachRemoteTracks(stream: MediaStream) {
@@ -760,8 +782,11 @@ class CallManager(private val session: XmppSession) {
 
     private fun teardown() {
         cancelConnectTimeout()
+        initialJingleRunnable?.let { handler.removeCallbacks(it) }
+        initialJingleRunnable = null
         runCatching { videoCapturer?.stopCapture() }
         runCatching { videoCapturer?.dispose() }
+        runCatching { surfaceTextureHelper?.dispose() }
         runCatching { videoTrack?.dispose() }
         runCatching { audioTrack?.dispose() }
         runCatching { peer?.close() }
@@ -769,14 +794,20 @@ class CallManager(private val session: XmppSession) {
         runCatching { localRenderer?.release() }
         runCatching { remoteRenderer?.release() }
         setAudioMode(false)
-        peer = null; audioTrack = null; videoTrack = null; videoCapturer = null
+        peer = null; audioTrack = null; videoTrack = null; videoCapturer = null; surfaceTextureHelper = null
         runCatching { factory?.dispose() }; factory = null
         runCatching { eglBase?.release() }; eglBase = null
         localRenderer = null; remoteRenderer = null
-        pendingCandidates.clear(); localCandidates.clear(); remoteSet = false; gatherScheduled = false
+        synchronized(candidateLock) {
+            pendingCandidates.clear()
+            localCandidates.clear()
+            remoteSet = false
+            canSendCandidates = false
+        }
+        gatherScheduled = false
         synchronized(gatheredCandidateTypes) { gatheredCandidateTypes.clear() }
         synchronized(receivedCandidateTypes) { receivedCandidateTypes.clear() }
-        canSendCandidates = false; pendingOfferXml = null
+        pendingOfferXml = null
         synchronized(discoveryLock) { discoveryStarted = false; discoveryDone = false }
         sid = ""; peerJid = ""; peerFullJid = ""; peerName = ""; wantsVideo = false; initiatorJid = ""
     }

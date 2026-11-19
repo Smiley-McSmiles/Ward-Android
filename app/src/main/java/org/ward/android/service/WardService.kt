@@ -26,7 +26,7 @@ class WardService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        core = WardCore.get()
+        core = WardCore.init(applicationContext)
         createChannels()
         try {
             // remoteMessaging is the correct type for a persistent XMPP connection. dataSync
@@ -72,8 +72,10 @@ class WardService : Service() {
     }
 
     override fun onDestroy() {
-        core.notificationSink = null
-        core.notificationDismissSink = null
+        if (::core.isInitialized) {
+            core.notificationSink = null
+            core.notificationDismissSink = null
+        }
         scope.cancel()
         super.onDestroy()
     }
@@ -156,7 +158,11 @@ class WardService : Service() {
         val sounds = core.settings.bool("notify.sounds") && !quiet
         val badge = core.settings.bool("notify.badge")
         val content = core.settings.string("notify.content", "full")
-        val title = if (chat.isGroup) "${chat.displayName} · ${msg.senderName}" else chat.displayName
+        val title = when {
+            content == "nothing" -> "Ward"
+            chat.isGroup -> "${chat.displayName} · ${msg.senderName}"
+            else -> chat.displayName
+        }
         val body = when {
             content == "nothing" -> "New message"
             content == "sender" || (core.settings.bool("notify.hide_encrypted") && msg.encryption.isNotBlank()) -> "New message"

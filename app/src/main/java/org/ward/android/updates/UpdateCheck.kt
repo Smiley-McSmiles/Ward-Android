@@ -25,12 +25,26 @@ object UpdateCheck {
         }
         return try {
             if (conn.responseCode != HttpURLConnection.HTTP_OK) return null
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val body = conn.inputStream.use { stream ->
+                val maxBytes = 512 * 1024
+                val buf = ByteArray(8192)
+                val out = java.io.ByteArrayOutputStream()
+                var total = 0
+                while (total < maxBytes) {
+                    val n = stream.read(buf, 0, minOf(buf.size, maxBytes - total))
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    total += n
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
             val json = JSONObject(body)
             if (json.optBoolean("draft") || json.optBoolean("prerelease")) return null
             val version = json.optString("tag_name").trim().removePrefix("v").removePrefix("V")
             if (version.isBlank()) return null
-            UpdateInfo(version, json.optString("html_url").ifBlank { RELEASES_URL })
+            val htmlUrl = json.optString("html_url")
+            val safeUrl = if (htmlUrl.startsWith("https://github.com/")) htmlUrl else RELEASES_URL
+            UpdateInfo(version, safeUrl)
         } catch (_: Exception) {
             null
         } finally {

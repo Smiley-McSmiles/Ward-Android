@@ -68,7 +68,6 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
     var settingsPage by remember { mutableStateOf<String?>(null) }
     var addAccountScreen by remember { mutableStateOf(false) }
     var accountFilter by remember { mutableStateOf<Long?>(null) }
-    var passwordFor by remember { mutableStateOf<AccountEntity?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
     var resyncingHistory by remember { mutableStateOf(false) }
@@ -285,20 +284,6 @@ fun MainScreen(vm: AppViewModel, onAddAccount: () -> Unit) {
             else -> Unit
         }
     }
-    if (passwordFor != null) {
-        var pw by remember(passwordFor) { mutableStateOf("") }
-        AlertDialog(onDismissRequest = { passwordFor = null }, title = { Text("Password") },
-            text = { OutlinedTextField(pw, { pw = it }, label = { Text("Password for ${passwordFor!!.jid}") },
-                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), singleLine = true) },
-            confirmButton = { TextButton(onClick = {
-                val a = passwordFor!!; passwordFor = null
-                org.ward.android.util.SecretStore.encryptOrNull(pw)?.let { stored ->
-                    vm.core.scope.launch { vm.core.updateAccount(a.copy(encryptedPassword = stored)) }
-                }
-                vm.connect(a, pw)
-            }) { Text("Connect") } },
-            dismissButton = { TextButton(onClick = { passwordFor = null }) { Text("Cancel") } })
-    }
     if (confirmDeleteSelection) {
         val count = selectedChatIds.size
         AlertDialog(
@@ -452,6 +437,8 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                 }
             }
         } else {
+            val currentSelectionMode by rememberUpdatedState(selectionMode)
+            val currentArchived by rememberUpdatedState(archived)
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 92.dp)) {
                 if (messageResults.isNotEmpty()) {
                     item { Text("Messages", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
@@ -468,9 +455,9 @@ fun ChatsTab(vm: AppViewModel, chats: List<ChatEntity>, requests: List<RequestEn
                 items(visible, key = { it.id }) { chat ->
                     val dismiss = rememberSwipeToDismissBoxState(
                         confirmValueChange = { value ->
-                            if (selectionMode) false
+                            if (currentSelectionMode) false
                             else if (value == SwipeToDismissBoxValue.EndToStart) {
-                                vm.setArchived(chat, !archived)
+                                vm.setArchived(chat, !currentArchived)
                                 true
                             } else false
                         }
@@ -702,12 +689,14 @@ fun AddContactDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = {
                 org.ward.android.util.AppLockStore.beginExternalActivity()
-                scan.launch(ScanOptions().apply {
-                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                    setPrompt("Scan a contact QR code")
-                    setBeepEnabled(false)
-                    setOrientationLocked(false)
-                })
+                runCatching {
+                    scan.launch(ScanOptions().apply {
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setPrompt("Scan a contact QR code")
+                        setBeepEnabled(false)
+                        setOrientationLocked(false)
+                    })
+                }.onFailure { org.ward.android.util.AppLockStore.endExternalActivity() }
             }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Filled.QrCodeScanner, null)
                 Spacer(Modifier.width(8.dp))
@@ -821,7 +810,8 @@ fun NewGroupDialog(vm: AppViewModel, initialAccountId: Long? = null, onDismiss: 
         TextButton(onClick = {
             if (name.isBlank() || accountId == 0L) return@TextButton
             val room = address.ifBlank {
-                suggestedRoom + "@conference." + accounts.first { it.id == accountId }.domain
+                val domain = accounts.firstOrNull { it.id == accountId }?.domain ?: return@TextButton
+                suggestedRoom + "@conference." + domain
             }
             vm.createGroup(accountId, room, name, private, description, if (private) invitees.toList() else emptyList())
             onDismiss()

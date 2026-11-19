@@ -75,8 +75,11 @@ fun AttachmentView(vm: AppViewModel, a: Map<String, Any>) {
     val progress = progressMap[url]
     val context = LocalContext.current
     val autoLimit = (vm.settings.string("attachments.auto_download", "1024").toIntOrNull() ?: 1024) * 1024L
-    val allowUnmetered = vm.settings.bool("attachments.accept_unmetered") &&
-        (context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false)
+    val allowUnmeteredSetting = vm.settings.bool("attachments.accept_unmetered")
+    val isUnmetered = remember(context) {
+        context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false
+    }
+    val allowUnmetered = allowUnmeteredSetting && isUnmetered
     val autoDownload = shouldAutoDownload(file != null, url.startsWith("local://"), size, autoLimit, allowUnmetered)
     LaunchedEffect(url, downloadRequested) {
         if (file == null && (autoDownload || downloadRequested)) {
@@ -225,18 +228,27 @@ private fun VideoAttachment(file: File?, name: String, loading: Boolean, failed:
 @Composable
 private fun VideoSurface(file: File, aspect: Float, onLongClick: () -> Unit,
                          onOpenExternal: () -> Unit) {
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    var surface by remember { mutableStateOf<Surface?>(null) }
-    var playing by remember { mutableStateOf(false) }
-    var prepared by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
-    var duration by remember { mutableIntStateOf(0) }
-    var position by remember { mutableIntStateOf(0) }
-    var scrubbing by remember { mutableStateOf(false) }
+    var player by remember(file) { mutableStateOf<MediaPlayer?>(null) }
+    var surface by remember(file) { mutableStateOf<Surface?>(null) }
+    var playing by remember(file) { mutableStateOf(false) }
+    var prepared by remember(file) { mutableStateOf(false) }
+    var failed by remember(file) { mutableStateOf(false) }
+    var duration by remember(file) { mutableIntStateOf(0) }
+    var position by remember(file) { mutableIntStateOf(0) }
+    var scrubbing by remember(file) { mutableStateOf(false) }
     val ratio = aspect
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-    DisposableEffect(file) {
+    DisposableEffect(file, lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP && playing) {
+                runCatching { player?.pause() }
+                playing = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(obs)
             player?.release()
             player = null
             surface?.release()
@@ -258,8 +270,9 @@ private fun VideoSurface(file: File, aspect: Float, onLongClick: () -> Unit,
     // needs. Capping the height cut portrait videos off at the top and bottom.
     val frame = Modifier.widthIn(max = 290.dp).fillMaxWidth().aspectRatio(ratio)
     Box(frame.clip(RoundedCornerShape(8.dp)).background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
+        key(file) {
+            AndroidView(
+                factory = { ctx ->
                 TextureView(ctx).apply {
                     surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
@@ -302,6 +315,7 @@ private fun VideoSurface(file: File, aspect: Float, onLongClick: () -> Unit,
             },
             modifier = Modifier.fillMaxSize()
         )
+        }
         // Interop views can swallow Compose gestures. Put a transparent gesture layer over the
         // video so long-press-to-save works everywhere except on the controls above it.
         Box(Modifier.matchParentSize().combinedClickable(onClick = {}, onLongClick = onLongClick))
@@ -414,24 +428,45 @@ private fun AudioAttachment(file: File?, name: String, loading: Boolean, failed:
                             progress: Float?, mime: String, vm: AppViewModel, url: String, pending: Boolean,
                             onDownload: () -> Unit, onLongClick: () -> Unit) {
     val context = LocalContext.current
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    var playing by remember { mutableStateOf(false) }
-    var duration by remember { mutableStateOf(0) }
-    DisposableEffect(Unit) { onDispose { player?.release(); player = null } }
+    var player by remember(file) { mutableStateOf<MediaPlayer?>(null) }
+    var playing by remember(file) { mutableStateOf(false) }
+    var duration by remember(file) { mutableStateOf(0) }
+    DisposableEffect(file) { onDispose { player?.release(); player = null } }
     Row(verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick).padding(4.dp)) {
         FilledIconButton(onClick = {
             if (file == null) return@FilledIconButton
-            if (playing) { player?.pause(); playing = false }
+            if (playing) { runCatching { player?.pause() }; playing = false }
             else {
                 if (player == null) {
-                    player = MediaPlayer().apply {
-                        setDataSource(file.absolutePath); prepare()
-                        duration = this.duration
-                        setOnCompletionListener { playing = false }
+                    val created = MediaPlayer()
+                    runCatching {
+                        created.setDataSource(file.absolutePath)
+                        created.setOnPreparedListener { mp ->
+                            duration = mp.duration
+                            mp.start()
+                            playing = true
+                        }
+                        created.setOnCompletionListener { playing = false }
+                        created.setOnErrorListener { mp, _, _ ->
+                            playing = false
+                            mp.release()
+                            if (player === mp) player = null
+                            android.widget.Toast.makeText(context, "Could not play audio", android.widget.Toast.LENGTH_SHORT).show()
+                            true
+                        }
+                        player = created
+                        created.prepareAsync()
+                    }.onFailure {
+                        created.release()
+                        player = null
+                        playing = false
+                        android.widget.Toast.makeText(context, "Could not play audio", android.widget.Toast.LENGTH_SHORT).show()
                     }
+                } else {
+                    runCatching { player?.start(); playing = true }
+                        .onFailure { playing = false }
                 }
-                player?.start(); playing = true
             }
         }, enabled = file != null) {
             Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (playing) "Pause" else "Play")

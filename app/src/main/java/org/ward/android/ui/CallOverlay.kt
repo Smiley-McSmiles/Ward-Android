@@ -24,10 +24,30 @@ import org.ward.android.xmpp.CallUiState
 fun CallOverlay(vm: AppViewModel) {
     val state by vm.core.call.collectAsState()
     val callState = state ?: return
-    val session = vm.core.session(callState.accountId) ?: return
+    val session = vm.core.session(callState.accountId)
+    if (session == null) {
+        Box(Modifier.fillMaxSize().background(Color(0xFF101010))) {
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(callState.peerName.ifBlank { "Call" }, style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                Spacer(Modifier.height(8.dp))
+                Text("Reconnecting…", color = Color(0xFFCCCCCC))
+            }
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp)) {
+                CallButton(Icons.Filled.CallEnd, "Hang up", Color(0xFFE01B24)) { vm.core.setCallState(null) }
+            }
+        }
+        return
+    }
     val call = session.call
     val context = LocalContext.current
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { call.answer() }
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        val micOk = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val camOk = !callState.video || androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (micOk && camOk) call.answer()
+        else {
+            android.widget.Toast.makeText(context, "Microphone/camera permission required for calls", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     fun answerCall() {
         val needed = if (callState.video) arrayOf(android.Manifest.permission.RECORD_AUDIO, android.Manifest.permission.CAMERA)
             else arrayOf(android.Manifest.permission.RECORD_AUDIO)
@@ -36,8 +56,11 @@ fun CallOverlay(vm: AppViewModel) {
     }
     Box(Modifier.fillMaxSize().background(Color(0xFF101010))) {
         if (callState.video && callState.remoteVideo != null && callState.phase == "ACTIVE") {
-            AndroidView(factory = { ctx -> SurfaceViewRenderer(ctx) }, update = { view -> call.attachRemote(view) },
-                modifier = Modifier.fillMaxSize())
+            AndroidView(
+                factory = { ctx -> SurfaceViewRenderer(ctx).also { call.attachRemote(it) } },
+                onRelease = { runCatching { it.release() } },
+                modifier = Modifier.fillMaxSize()
+            )
         } else {
             Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center) {
@@ -58,9 +81,12 @@ fun CallOverlay(vm: AppViewModel) {
             }
         }
         if (callState.video && callState.phase == "ACTIVE") {
-            AndroidView(factory = { ctx -> SurfaceViewRenderer(ctx) }, update = { view -> call.attachLocal(view) },
+            AndroidView(
+                factory = { ctx -> SurfaceViewRenderer(ctx).also { call.attachLocal(it) } },
+                onRelease = { runCatching { it.release() } },
                 modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(110.dp, 150.dp)
-                    .clip(RoundedCornerShape(12.dp)))
+                    .clip(RoundedCornerShape(12.dp))
+            )
         }
         Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             if (callState.phase == "INCOMING") {

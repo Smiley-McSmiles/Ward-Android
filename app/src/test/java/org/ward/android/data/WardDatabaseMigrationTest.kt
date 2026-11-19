@@ -88,7 +88,30 @@ class WardDatabaseMigrationTest {
 
             db.query("PRAGMA user_version").use { c ->
                 assertTrue(c.moveToFirst())
-                assertEquals(5, c.getInt(0))
+                assertEquals(6, c.getInt(0))
+            }
+
+            // Verify multiple NULL stanzaId messages are allowed and cascade delete works.
+            db.execSQL("PRAGMA foreign_keys=ON")
+            db.execSQL("""INSERT INTO messages
+                (chatId, stanzaId, originId, msgId, sender, senderJid, senderName, occupantId,
+                 direction, timestamp, body, isMarkdown, kind, encryption, senderDevice, trust,
+                 edited, retracted, replyTo, replyPreview, replyAuthor, status, error, mentionsMe,
+                 reactionsJson, attachmentsJson, rawJson)
+                VALUES (1, NULL, '', '', 'Bob', 'bob@example.org', 'Bob', '', 0, 2,
+                        'null stanza 1', 0, 'text', '', 0, '', 0, 0, '', '', '', 0, '', 0,
+                        '[]', '[]', ''),
+                       (1, NULL, '', '', 'Bob', 'bob@example.org', 'Bob', '', 0, 3,
+                        'null stanza 2', 0, 'text', '', 0, '', 0, 0, '', '', '', 0, '', 0,
+                        '[]', '[]', '')""")
+            db.query("SELECT COUNT(*) FROM messages WHERE chatId = 1").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(3, c.getInt(0))
+            }
+            db.execSQL("DELETE FROM accounts WHERE id = 1")
+            db.query("SELECT COUNT(*) FROM messages").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(0, c.getInt(0))
             }
         } finally {
             room.close()

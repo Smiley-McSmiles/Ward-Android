@@ -328,7 +328,9 @@ fun SettingsPage(vm: AppViewModel, key: String, accounts: List<AccountEntity>, s
                  onBack: () -> Unit, onNavigate: (String) -> Unit, onAddAccount: () -> Unit = {}) {
     BackHandler { onBack() }
     if (key.startsWith("account:")) {
-        AccountSettingsPage(vm, key.substringAfter(':').toLong(), accounts, states, onBack)
+        val accountId = key.substringAfter(':').toLongOrNull()
+        if (accountId == null) { LaunchedEffect(Unit) { onBack() }; return }
+        AccountSettingsPage(vm, accountId, accounts, states, onBack)
         return
     }
     if (key == "about") { AboutPage(onBack, onDonate = { onNavigate("donate") }); return }
@@ -716,7 +718,7 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    if (acc == null) { onBack(); return }
+    if (acc == null) { LaunchedEffect(Unit) { onBack() }; return }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         org.ward.android.util.AppLockStore.endExternalActivity()
         if (uri != null) {
@@ -814,7 +816,8 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
                         trailingContent = {
                             OutlinedButton(onClick = {
                                 org.ward.android.util.AppLockStore.beginExternalActivity()
-                                pickPhoto.launch("image/*")
+                                runCatching { pickPhoto.launch("image/*") }
+                                    .onFailure { org.ward.android.util.AppLockStore.endExternalActivity() }
                             }) { Text(if (acc.avatar.isBlank()) "Choose" else "Change") }
                         })
                     SettingsDivider()
@@ -848,18 +851,27 @@ fun AccountSettingsPage(vm: AppViewModel, id: Long, accounts: List<AccountEntity
                         Button(enabled = password.length >= 6 && !changingPassword, onClick = {
                             changingPassword = true
                             scope.launch {
-                                val result = runCatching {
+                                val serverResult = runCatching {
                                     withContext(Dispatchers.IO) {
                                         val conn = vm.core.session(acc.id)?.connection ?: error("Connect this account first")
                                         org.jivesoftware.smackx.iqregister.AccountManager.getInstance(conn).changePassword(password)
                                     }
-                                    vm.core.updateAccount(acc.copy(encryptedPassword = SecretStore.encrypt(password)))
                                 }
+                                if (serverResult.isFailure) {
+                                    changingPassword = false
+                                    snackbar.showSnackbar("Could not change the password: ${serverResult.exceptionOrNull()?.message ?: "unknown error"}")
+                                    return@launch
+                                }
+                                val encrypted = SecretStore.encryptOrNull(password)
+                                val msg = if (encrypted != null) {
+                                    vm.core.updateAccount(acc.copy(encryptedPassword = encrypted))
+                                    "Password changed"
+                                } else {
+                                    "Password changed on server, but could not save locally"
+                                }
+                                password = ""
                                 changingPassword = false
-                                if (result.isSuccess) password = ""
-                                snackbar.showSnackbar(result.fold({ "Password changed" }, {
-                                    "Could not change the password: ${it.message ?: "unknown error"}"
-                                }))
+                                snackbar.showSnackbar(msg)
                             }
                         }) { Text(if (changingPassword) "Changing…" else "Change password") }
                     }

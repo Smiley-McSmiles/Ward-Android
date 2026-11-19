@@ -63,20 +63,34 @@ object OpenPgp {
             for (c in certs) addVerificationCert(c)
         }
         val stream = PGPainless.decryptAndOrVerify().onInputStream(ByteArrayInputStream(data)).withOptions(opts)
-        return stream.use { it.readBytes() }
+        val plain = stream.use { it.readBytes() }
+        if (!stream.metadata.isVerifiedSigned()) {
+            throw SecurityException("OpenPGP signature verification failed")
+        }
+        return plain
     }
 
-    fun signcryptXml(body: String, toJid: String): String {
+    fun signcryptXml(body: String, toJid: String, fromJid: String = ""): String {
         val stamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
             .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(Date())
-        val rpad = (1..80).map { ('a' + (it * 7 % 26)) }.joinToString("")
-        return "<signcrypt xmlns='$NS'><to jid='${esc(toJid)}'/><time stamp='$stamp'/><rpad>$rpad</rpad><payload><body xmlns='jabber:client'>${esc(body)}</body></payload></signcrypt>"
+        val rng = java.security.SecureRandom()
+        val padLen = 64 + rng.nextInt(65)
+        val rpad = (1..padLen).map { ('a' + rng.nextInt(26)) }.joinToString("")
+        val fromAttr = if (fromJid.isNotBlank()) "<from jid='${esc(fromJid)}'/>" else ""
+        return "<signcrypt xmlns='$NS'><to jid='${esc(toJid)}'/>$fromAttr<time stamp='$stamp'/><rpad>$rpad</rpad><payload><body xmlns='jabber:client'>${esc(body)}</body></payload></signcrypt>"
     }
 
-    fun parseSigncrypt(xml: String, expectedTo: String): String? {
-        if (xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY")) return null
+    fun parseSigncrypt(xml: String, expectedTo: String, expectedFrom: String = ""): String? {
         return runCatching {
-            val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+                isNamespaceAware = true
+                setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true)
+                setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+                setFeature("http://xml.org/sax/features/external-general-entities", false)
+                setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+                isXIncludeAware = false
+                isExpandEntityReferences = false
+            }
             val doc = factory.newDocumentBuilder().parse(ByteArrayInputStream(xml.toByteArray()))
             val root = doc.documentElement
             if (root.localName != "signcrypt" || root.namespaceURI != NS) return null
@@ -87,6 +101,13 @@ object OpenPgp {
                 if (jid.equals(expectedTo, true)) addressed = true
             }
             if (!addressed) return null
+            if (expectedFrom.isNotBlank()) {
+                val froms = root.getElementsByTagNameNS(NS, "from")
+                if (froms.length > 0) {
+                    val fromJid = (froms.item(0) as org.w3c.dom.Element).getAttribute("jid").substringBefore('/')
+                    if (fromJid.isNotBlank() && !fromJid.equals(expectedFrom, true)) return null
+                }
+            }
             val time = root.getElementsByTagNameNS(NS, "time")
             if (time.length > 0) {
                 val stamp = (time.item(0) as org.w3c.dom.Element).getAttribute("stamp")

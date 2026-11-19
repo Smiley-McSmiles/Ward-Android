@@ -471,8 +471,10 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
                                 OutlinedButton(onClick = {
                                     scope.launch {
                                         busy = true
-                                        runCatching { apply(svc!!.advance(s, "prev")) }
-                                            .onFailure { error = it.message ?: "Failed" }
+                                        runCatching {
+                                            val activeSvc = svc ?: error("Not connected")
+                                            apply(activeSvc.advance(s, "prev"))
+                                        }.onFailure { error = it.message ?: "Failed" }
                                         busy = false
                                     }
                                 }) { Text("Back") }
@@ -481,7 +483,10 @@ fun AdminCommandScreen(vm: AppViewModel, accountId: Long, command: AdminCommand,
                                 val act = s.defaultAction.ifBlank { if ("next" in s.actions) "next" else "complete" }
                                 scope.launch {
                                     busy = true; error = ""
-                                    try { withContext(Dispatchers.IO) { apply(svc!!.advance(s, act, values)) } }
+                                    try {
+                                        val activeSvc = svc ?: error("Not connected")
+                                        withContext(Dispatchers.IO) { apply(activeSvc.advance(s, act, values)) }
+                                    }
                                     catch (e: Exception) { error = adminError(e) }
                                     busy = false
                                 }
@@ -561,10 +566,15 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    val filteredLog = (if (paused) frozen else log).filter { it.accountId == accountId }
+    val filteredLog = remember(log, frozen, paused, accountId) {
+        (if (paused) frozen else log).filter { it.accountId == accountId }
+    }
     val saveLog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         AppLockStore.endExternalActivity()
-        if (uri == null) return@rememberLauncherForActivityResult
+        if (uri == null) {
+            scope.launch(Dispatchers.IO) { java.io.File(context.cacheDir, "xml-console-export.txt").delete() }
+            return@rememberLauncherForActivityResult
+        }
         scope.launch {
             val ok = runCatching {
                 withContext(Dispatchers.IO) {
@@ -606,7 +616,9 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
                             java.io.File(context.cacheDir, "xml-console-export.txt").writeText(exportText)
                         }
                         AppLockStore.beginExternalActivity()
-                        saveLog.launch("ward-xml-${System.currentTimeMillis()}.txt")
+                        runCatching {
+                            saveLog.launch("ward-xml-${System.currentTimeMillis()}.txt")
+                        }.onFailure { AppLockStore.endExternalActivity() }
                     }
                 }
             }) { Icon(Icons.Filled.Save, "Save as") }
@@ -623,7 +635,7 @@ fun XmlConsolePage(vm: AppViewModel, onBack: () -> Unit) {
             }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                itemsIndexed(filteredLog, key = { i, e -> "$i:${e.time}:${e.text.hashCode()}" }) { i, e ->
+                itemsIndexed(filteredLog, key = { i, e -> if (e.id != 0L) e.id else "$i:${e.time}:${e.text.hashCode()}" }) { _, e ->
                     Text((if (e.incoming) "← " else "→ ") + e.text, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                         color = if (e.incoming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable {
@@ -665,10 +677,11 @@ fun DiscoPage(vm: AppViewModel, onBack: () -> Unit) {
     var items by remember { mutableStateOf<org.jivesoftware.smackx.disco.packet.DiscoverItems?>(null) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     fun query() {
         val s = vm.core.session(accountId) ?: return
         busy = true; error = ""
-        vm.core.scope.launch {
+        scope.launch {
             try {
                 withContext(Dispatchers.IO) { info = s.discoverInfo(jid); items = s.discoverItems(jid) }
             } catch (e: Exception) { error = e.message ?: "Could not query the service" }

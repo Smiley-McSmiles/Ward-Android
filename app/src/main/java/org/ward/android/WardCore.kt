@@ -74,14 +74,14 @@ class WardCore private constructor(val context: Context) {
 
     fun state(accountId: Long): ConnectionState = _states.value[accountId] ?: ConnectionState()
     private fun setState(accountId: Long, s: ConnectionState) {
-        _states.value = _states.value + (accountId to s)
+        _states.update { it + (accountId to s) }
     }
     fun setActiveChat(id: Long?) { _activeChat.value = id }
     fun setAppForeground(value: Boolean) { appForeground = value }
     /** True only while the activity is visible and this chat is the one on screen. */
     fun isChatActive(chatId: Long): Boolean = appForeground && _activeChat.value == chatId
     fun setTyping(chatId: Long, who: String) {
-        _typing.value = if (who.isBlank()) _typing.value - chatId else _typing.value + (chatId to who)
+        _typing.update { if (who.isBlank()) it - chatId else it + (chatId to who) }
     }
 
     suspend fun addAccount(jid: String, password: String, remember: Boolean = true, options: Map<String, String> = emptyMap(),
@@ -235,7 +235,7 @@ class WardCore private constructor(val context: Context) {
 
     internal fun onState(accountId: Long, state: ConnectionState) { setState(accountId, state) }
     internal fun onAdmin(accountId: Long, commands: List<AdminCommand>) {
-        _adminCommands.value = _adminCommands.value + (accountId to commands)
+        _adminCommands.update { it + (accountId to commands) }
         scope.launch { dao.setAdmin(accountId, commands.any { it.node.startsWith(NsAdmin.ADMIN) }) }
     }
 
@@ -349,7 +349,7 @@ class WardCore private constructor(val context: Context) {
         if (!force && !isChatActive(chat.id)) return
         notificationDismissSink?.invoke(chat.id)
         val msgs = dao.messagesNow(chat.id, 500)
-        val lastIn = msgs.lastOrNull { it.direction == 0 }
+        val lastIn = msgs.firstOrNull { it.direction == 0 }
         val updated = chat.copy(unread = 0, mentions = 0, lastReadId = lastIn?.id ?: chat.lastReadId)
         dao.updateChat(updated)
         if (lastIn != null && settings.bool("chats.send_markers")) sessions[chat.accountId]?.sendDisplayed(chat, lastIn)
@@ -438,7 +438,8 @@ class WardCore private constructor(val context: Context) {
         val session = sessions[chat.accountId] ?: return null
         var name = queryName(uri) ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "file"
         var mime = context.contentResolver.getType(uri) ?: org.ward.android.xmpp.guessMime(name)
-        var tmp = File(context.cacheDir, "upload-${System.currentTimeMillis()}-${name.replace('/', '_')}")
+        val safeTmpName = name.replace(Regex("[\\\\/\\u0000]"), "_").take(120)
+        var tmp = File(context.cacheDir, "upload-${System.currentTimeMillis()}-$safeTmpName")
         withContext(Dispatchers.IO) {
             context.contentResolver.openInputStream(uri)?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
         }
@@ -499,11 +500,14 @@ class WardCore private constructor(val context: Context) {
                         val out = File(context.cacheDir, "video-${System.currentTimeMillis()}.mp4")
                         val latch = java.util.concurrent.CountDownLatch(1)
                         val result = java.util.concurrent.atomic.AtomicReference<File?>()
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        val transformerRef = java.util.concurrent.atomic.AtomicReference<Transformer?>()
+                        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                        mainHandler.post {
                             runCatching {
                                 val transformer = Transformer.Builder(context)
                                     .setVideoMimeType(MimeTypes.VIDEO_H264)
                                     .build()
+                                transformerRef.set(transformer)
                                 transformer.addListener(object : Transformer.Listener {
                                     override fun onTransformationCompleted(inputMediaItem: MediaItem) {
                                         result.set(out); latch.countDown()
@@ -515,9 +519,12 @@ class WardCore private constructor(val context: Context) {
                                 transformer.start(item, out.absolutePath)
                             }.onFailure { latch.countDown() }
                         }
-                        latch.await(180, java.util.concurrent.TimeUnit.SECONDS)
+                        val completed = latch.await(180, java.util.concurrent.TimeUnit.SECONDS)
+                        if (!completed) {
+                            mainHandler.post { runCatching { transformerRef.get()?.cancel() } }
+                        }
                         if (result.get() == null) out.delete()
-                        if (out.exists() && out.length() > 0 && out.length() < tmp.length()) {
+                        if (completed && out.exists() && out.length() > 0 && out.length() < tmp.length()) {
                             tmp.delete()
                             out.renameTo(tmp)
                             mime = "video/mp4"
@@ -560,17 +567,21 @@ class WardCore private constructor(val context: Context) {
         var fileEncrypted = false
         if (encryptedChat) {
             val enc = File(context.cacheDir, tmp.name + ".aesgcm")
-            val keys = withContext(Dispatchers.IO) {
-                runCatching { org.ward.android.util.FileCrypto.encrypt(tmp, enc) }.getOrNull()
-            } ?: return fail("Could not encrypt file")
-            val https = withContext(Dispatchers.IO) {
-                // Keep the original extension in the upload URL. Cheogram/Conversations infer the
-                // decrypted file type from that extension; an ".enc" suffix makes a photo look
-                // like an unknown file and leaves the receiver with no app to open it.
-                runCatching { session.upload(enc, uploadName, "application/octet-stream") }.getOrNull()
-            } ?: return fail("Upload failed")
-            link = org.ward.android.util.FileCrypto.aesgcmUrl(https, keys.second, keys.first)
-            fileEncrypted = true
+            try {
+                val keys = withContext(Dispatchers.IO) {
+                    runCatching { org.ward.android.util.FileCrypto.encrypt(tmp, enc) }.getOrNull()
+                } ?: return fail("Could not encrypt file")
+                val https = withContext(Dispatchers.IO) {
+                    // Keep the original extension in the upload URL. Cheogram/Conversations infer the
+                    // decrypted file type from that extension; an ".enc" suffix makes a photo look
+                    // like an unknown file and leaves the receiver with no app to open it.
+                    runCatching { session.upload(enc, uploadName, "application/octet-stream") }.getOrNull()
+                } ?: return fail("Upload failed")
+                link = org.ward.android.util.FileCrypto.aesgcmUrl(https, keys.second, keys.first)
+                fileEncrypted = true
+            } finally {
+                enc.delete()
+            }
         } else {
             link = withContext(Dispatchers.IO) {
                 runCatching { session.upload(tmp, uploadName, mime) }.getOrNull()
@@ -595,9 +606,12 @@ class WardCore private constructor(val context: Context) {
         }
 
     suspend fun localFile(url: String, name: String, mime: String): File? {
-        val cache = File(context.cacheDir, "files").apply { mkdirs() }
-        val noMedia = File(cache, ".nomedia")
-        if (settings.bool("attachments.hide_gallery")) noMedia.createNewFile() else noMedia.delete()
+        val cache = withContext(Dispatchers.IO) {
+            File(context.cacheDir, "files").apply { mkdirs() }.also { dir ->
+                val noMedia = File(dir, ".nomedia")
+                if (settings.bool("attachments.hide_gallery")) noMedia.createNewFile() else noMedia.delete()
+            }
+        }
 
         // The same attachment can be composed more than once (for example after a carbon copy or
         // when a LazyColumn item is recreated). Join the in-flight download instead of starting a
@@ -631,42 +645,50 @@ class WardCore private constructor(val context: Context) {
             withContext(Dispatchers.IO) {
                 val source = if (link != null) link.httpsUrl else url
                 var existing = if (raw.isFile) raw.length() else 0L
-                val connection = URL(source).openConnection() as java.net.HttpURLConnection
-                if (existing > 0L) connection.setRequestProperty("Range", "bytes=$existing-")
-                val code = connection.responseCode
-                if (code == 416) {
-                    // The server no longer has the bytes we kept: start over instead of failing
-                    // forever on the same stale partial file.
-                    raw.delete()
-                    connection.disconnect()
-                    throw java.io.IOException("stale partial download for $url")
+                val connection = (URL(source).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
                 }
-                val resumed = existing > 0L && code == java.net.HttpURLConnection.HTTP_PARTIAL
-                if (!resumed) {
-                    existing = 0L
-                    raw.delete()
-                }
-                val total = if (resumed) existing + connection.contentLengthLong else connection.contentLengthLong
-                var copied = existing
-                var lastUpdate = 0L
-                connection.getInputStream().use { input ->
-                    java.io.FileOutputStream(raw, resumed).use { output ->
-                        val buffer = ByteArray(64 * 1024)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            output.write(buffer, 0, read)
-                            copied += read
-                            if (total > 0 && (copied == total || System.currentTimeMillis() - lastUpdate > 100)) {
-                                downloadProgress.update { progress ->
-                                    progress + (url to (copied.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                try {
+                    if (existing > 0L) connection.setRequestProperty("Range", "bytes=$existing-")
+                    val code = connection.responseCode
+                    if (code == 416) {
+                        // The server no longer has the bytes we kept: start over instead of failing
+                        // forever on the same stale partial file.
+                        raw.delete()
+                        throw java.io.IOException("stale partial download for $url")
+                    }
+                    if (code !in 200..299) {
+                        throw java.io.IOException("HTTP $code for $url")
+                    }
+                    val resumed = existing > 0L && code == java.net.HttpURLConnection.HTTP_PARTIAL
+                    if (!resumed) {
+                        existing = 0L
+                        raw.delete()
+                    }
+                    val total = if (resumed) existing + connection.contentLengthLong else connection.contentLengthLong
+                    var copied = existing
+                    var lastUpdate = 0L
+                    connection.getInputStream().use { input ->
+                        java.io.FileOutputStream(raw, resumed).use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                output.write(buffer, 0, read)
+                                copied += read
+                                if (total > 0 && (copied == total || System.currentTimeMillis() - lastUpdate > 100)) {
+                                    downloadProgress.update { progress ->
+                                        progress + (url to (copied.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                                    }
+                                    lastUpdate = System.currentTimeMillis()
                                 }
-                                lastUpdate = System.currentTimeMillis()
                             }
                         }
                     }
+                } finally {
+                    connection.disconnect()
                 }
-                connection.disconnect()
                 // Publish only a complete file: decrypt (or rename) into .part, then move it into
                 // place in one step so no caller can ever see a half-written attachment.
                 val part = File(cache, out.name + ".part")
@@ -743,9 +765,10 @@ class WardCore private constructor(val context: Context) {
         }
     }
 
+    private val nextXmlId = java.util.concurrent.atomic.AtomicLong(0L)
     fun addXmlLog(accountId: Long, incoming: Boolean, text: String) {
-        val entry = XmlLogEntry(System.currentTimeMillis(), accountId, incoming, text)
-        _xml.value = (_xml.value + entry).takeLast(500)
+        val entry = XmlLogEntry(System.currentTimeMillis(), accountId, incoming, text, nextXmlId.incrementAndGet())
+        _xml.update { (it + entry).takeLast(500) }
     }
     fun clearXml() { _xml.value = emptyList() }
     private val _call = MutableStateFlow<org.ward.android.xmpp.CallUiState?>(null)
@@ -772,7 +795,7 @@ class WardCore private constructor(val context: Context) {
     }
 }
 
-data class XmlLogEntry(val time: Long, val accountId: Long, val incoming: Boolean, val text: String)
+data class XmlLogEntry(val time: Long, val accountId: Long, val incoming: Boolean, val text: String, val id: Long = 0L)
 data class ReactionSet(val emoji: List<String>, val who: String, val mine: Boolean)
 fun parseReactions(json: String): List<ReactionSet> = runCatching {
     WardCore.get().gson.fromJson<List<ReactionSet>>(json, object : TypeToken<List<ReactionSet>>() {}.type)

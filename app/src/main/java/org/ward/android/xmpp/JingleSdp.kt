@@ -63,8 +63,15 @@ object JingleSdp {
 
     fun jingleToSdp(jingleXmlFull: String, answering: Boolean): String? = runCatching {
         val jingleXml = extractJingle(jingleXmlFull) ?: jingleXmlFull
-        val doc = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
-            .newDocumentBuilder().parse(ByteArrayInputStream(jingleXml.toByteArray()))
+        val doc = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            isXIncludeAware = false
+            isExpandEntityReferences = false
+        }.newDocumentBuilder().parse(ByteArrayInputStream(jingleXml.toByteArray()))
         val root = doc.documentElement
         if (root.localName != "jingle") return null
         val contents = root.getElementsByTagNameNS(NS_JINGLE, "content")

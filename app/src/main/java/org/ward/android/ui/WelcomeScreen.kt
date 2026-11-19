@@ -118,7 +118,8 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
             }
         }
     }
-    val latest = accounts.lastOrNull()
+    val targetJid = remember(jid) { JidUtil.bare(jid) }
+    val latest = accounts.firstOrNull { it.jid.equals(targetJid, ignoreCase = true) }
     val state = latest?.let { states[it.id] }
     LaunchedEffect(state?.state) {
         if (state?.state == "online") busy = false
@@ -159,7 +160,8 @@ private fun SignInPage(vm: AppViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 OutlinedButton(onClick = {
                     AppLockStore.beginExternalActivity()
-                    pickBackup.launch(arrayOf("application/octet-stream", "*/*"))
+                    runCatching { pickBackup.launch(arrayOf("application/octet-stream", "*/*")) }
+                        .onFailure { AppLockStore.endExternalActivity() }
                 }, enabled = !busy && !readingBackup, modifier = Modifier.fillMaxWidth()) {
                     if (readingBackup) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     else Icon(Icons.Filled.Upload, null)
@@ -285,7 +287,7 @@ Column(Modifier.widthIn(max = 460.dp)) {
                         try {
                             withContext(Dispatchers.IO) { Registration.createAccount(domain, username, password) }
                             vm.addAccount("$username@$domain", password, true,
-                                onError = { error = it; busy = false })
+                                onError = { error = it; busy = false }).join()
                             busy = false
                         } catch (e: Exception) {
                             error = e.message ?: "Could not create the account"; busy = false

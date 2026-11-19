@@ -82,7 +82,7 @@ fun initExtensionProviders() {
 }
 
 fun esc(s: String): String = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    .replace("\"", "&quot;")
+    .replace("\"", "&quot;").replace("'", "&apos;")
 
 fun Message.addMarkdown() = addExtension(RawExtension("markdown", Ns.MARKDOWN,
     "<markdown xmlns='${Ns.MARKDOWN}'/>"))
@@ -171,7 +171,7 @@ fun Message.addFileSharing(url: String, name: String, mime: String, size: Long, 
     if (width > 0) f.append("<width>$width</width>")
     if (height > 0) f.append("<height>$height</height>")
     if (sha256.isNotBlank()) f.append("<hash xmlns='${Ns.HASHES}' algo='sha-256'>${esc(sha256)}</hash>")
-    if (thumbnailB64.isNotBlank()) f.append("<thumbnail xmlns='${Ns.THUMBS}' uri='data:image/jpeg;base64,${thumbnailB64}' media-type='image/jpeg'/>")
+    if (thumbnailB64.isNotBlank()) f.append("<thumbnail xmlns='${Ns.THUMBS}' uri='data:image/jpeg;base64,${esc(thumbnailB64)}' media-type='image/jpeg'/>")
     f.append("</file>")
     f.append("<sources><url-data xmlns='http://jabber.org/protocol/url-data' target='${esc(url)}'/></sources>")
     f.append("</file-sharing>")
@@ -355,7 +355,7 @@ fun org.jivesoftware.smack.packet.StanzaBuilder<*>.addFileSharing(url: String, n
     if (width > 0) f.append("<width>$width</width>")
     if (height > 0) f.append("<height>$height</height>")
     if (sha256.isNotBlank()) f.append("<hash xmlns='${Ns.HASHES}' algo='sha-256'>${esc(sha256)}</hash>")
-    if (thumbnailB64.isNotBlank()) f.append("<thumbnail xmlns='${Ns.THUMBS}' uri='data:image/jpeg;base64,${thumbnailB64}' media-type='image/jpeg'/>")
+    if (thumbnailB64.isNotBlank()) f.append("<thumbnail xmlns='${Ns.THUMBS}' uri='data:image/jpeg;base64,${esc(thumbnailB64)}' media-type='image/jpeg'/>")
     f.append("</file><sources><url-data xmlns='http://jabber.org/protocol/url-data' target='${esc(url)}'/></sources></file-sharing>")
     addExtension(RawExtension("file-sharing", Ns.SFS, f.toString()))
     addExtension(RawExtension("x", Ns.OOB, "<x xmlns='${Ns.OOB}'><url>${esc(url)}</url><desc>${esc(name)}</desc></x>"))

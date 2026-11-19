@@ -3,6 +3,7 @@ package org.ward.android.data
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 
 enum class SettingType { BOOL, CHOICE, INT, TEXT, LIST, TIME_RANGE }
 data class SettingChoice(val value: Any, val label: String)
@@ -164,7 +165,9 @@ object SettingsSchema {
 }
 
 class SettingsStore(context: Context) {
-    private val prefs = context.getSharedPreferences("ward_settings", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("ward_settings", Context.MODE_PRIVATE)
+    private val secretKeys = setOf("calls.turn_password", "calls.turn_secret")
     private val _state = MutableStateFlow(load())
     val state: StateFlow<Map<String, String>> = _state
 
@@ -172,7 +175,10 @@ class SettingsStore(context: Context) {
         val m = mutableMapOf<String, String>()
         for (spec in SettingsSchema.specs) {
             val d = when (val v = spec.default) { is List<*> -> v.joinToString("\n"); else -> v.toString() }
-            m[spec.key] = prefs.getString(spec.key, d) ?: d
+            val raw = prefs.getString(spec.key, d) ?: d
+            m[spec.key] = if (spec.key in secretKeys && raw.isNotBlank()) {
+                org.ward.android.util.SecretStore.decrypt(raw)
+            } else raw
         }
         if (m["appearance.accent"] == "system") {
             m["appearance.accent"] = "blue"
@@ -190,11 +196,19 @@ class SettingsStore(context: Context) {
     fun list(key: String): List<String> = string(key).split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
     fun set(key: String, value: Any) {
         val s = when (value) { is List<*> -> value.joinToString("\n"); else -> value.toString() }
-        prefs.edit().putString(key, s).apply()
-        _state.value = _state.value + (key to s)
+        val stored = if (key in secretKeys && s.isNotBlank()) {
+            org.ward.android.util.SecretStore.encryptOrNull(s) ?: s
+        } else s
+        prefs.edit().putString(key, stored).apply()
+        _state.update { it + (key to s) }
     }
     fun setString(key: String, value: String) = set(key, value)
-    fun isDark(): Boolean = when (string("appearance.style", "system")) { "dark" -> true; "light" -> false; else -> false }
+    fun isDark(): Boolean = when (string("appearance.style", "system")) {
+        "dark" -> true
+        "light" -> false
+        else -> (appContext.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+    }
     fun accent(): String = string("appearance.accent", "system")
 
     // Not user-facing settings: bookkeeping for the daily GitHub release check.

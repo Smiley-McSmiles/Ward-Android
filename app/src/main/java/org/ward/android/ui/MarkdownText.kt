@@ -43,7 +43,7 @@ private sealed class Block {
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurface,
                  largeEmoji: Boolean = true, onLongPress: (() -> Unit)? = null) {
-    val blocks = parseBlocks(text)
+    val blocks = remember(text) { parseBlocks(text) }
     Column(modifier) {
         for (b in blocks) {
             when (b) {
@@ -138,7 +138,8 @@ private fun InlineMarkdown(text: String, color: Color,
                           onLongPress: (() -> Unit)? = null) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
-    val annotated = inline(text, color, MaterialTheme.colorScheme.primary)
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val annotated = remember(text, color, primaryColor) { inline(text, color, primaryColor) }
     var layout by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
     Text(annotated, modifier = modifier.pointerInput(annotated, onLongPress) {
         detectTapGestures(
@@ -279,11 +280,19 @@ private fun appendInline(b: AnnotatedString.Builder, src: String, base: SpanStyl
                 val end = src.indexOf(')', close + 2)
                 if (end > close + 2) {
                     val label = src.substring(i + 1, close)
-                    val url = src.substring(close + 2, end)
+                    val url = src.substring(close + 2, end).trim()
+                    val allowed = url.startsWith("https://", ignoreCase = true) ||
+                        url.startsWith("http://", ignoreCase = true) ||
+                        url.startsWith("xmpp:", ignoreCase = true) ||
+                        url.startsWith("mailto:", ignoreCase = true)
                     val start = b.length
-                    appendInline(b, label, merge(base, SpanStyle(color = linkColor,
-                        textDecoration = TextDecoration.Underline)), color, linkColor)
-                    b.addStringAnnotation("URL", url, start, b.length)
+                    if (allowed) {
+                        appendInline(b, label, merge(base, SpanStyle(color = linkColor,
+                            textDecoration = TextDecoration.Underline)), color, linkColor)
+                        b.addStringAnnotation("URL", url, start, b.length)
+                    } else {
+                        appendInline(b, src.substring(i, end + 1), base, color, linkColor)
+                    }
                     i = end + 1; continue
                 }
             }

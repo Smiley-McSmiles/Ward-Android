@@ -205,6 +205,7 @@ class Omemo2(
         var sessions: MutableMap<String, String> = mutableMapOf(),
         var identities: MutableMap<String, String> = mutableMapOf(),
         var trusted: MutableMap<String, Boolean> = mutableMapOf(),
+        var verified: MutableSet<String>? = null,
     )
 
     private data class CachedDevices(val at: Long, val devices: List<Int>)
@@ -230,6 +231,7 @@ class Omemo2(
     private val sessions = HashMap<String, SessionRecord>()
     private val identities = HashMap<String, IdentityKey>()
     private val trusted = HashMap<String, Boolean>()
+    private val verified = HashSet<String>()
     private val deviceCache = HashMap<String, CachedDevices>()
     private val bundleCache = HashMap<String, CachedBundle>()
 
@@ -327,6 +329,7 @@ class Omemo2(
                 identities[k] = if (bytes.size == 32) IdentityKey(Curve.decodePointEd(bytes, 0)) else IdentityKey(bytes, 0)
             }
             trusted.putAll(disk.trusted)
+            verified.addAll(disk.verified.orEmpty())
             // One-time repair for sessions built from the wrong device bundle. A session that
             // still has an unacknowledged PreKey message was never confirmed by the peer; drop it
             // and the identity pinned from that bundle so the next message establishes a correct
@@ -384,6 +387,7 @@ class Omemo2(
         disk.sessions = sessions.entries.associate { it.key to b64(it.value.serialize()) }.toMutableMap()
         disk.identities = identities.entries.associate { it.key to b64(it.value.serialize()) }.toMutableMap()
         disk.trusted = trusted
+        disk.verified = verified.toMutableSet()
         disk.nextPreKeyId = nextPreKeyId
         val tmp = File(dir, "state.json.tmp")
         tmp.writeText(gson.toJson(disk))
@@ -429,13 +433,15 @@ class Omemo2(
             disk.identities[k] = b64(identityKey.publicKey.serializeEd())
             val changed = old != null && !old.equals(identityKey)
             if (changed) {
+                val wasVerified = k in verified
                 val btbv = core.settings.string("encryption.trust", "btbv") == "btbv"
-                // In blind-trust mode a rotated identity must not brick the conversation
-                // permanently. Manual trust still refuses it until the device is forgotten or
-                // explicitly verified.
-                trusted[k] = btbv
+                // In blind-trust mode an unverified rotated identity must not brick the
+                // conversation permanently. Verified or manual-trust devices still refuse key
+                // changes until explicitly re-verified.
+                trusted[k] = if (wasVerified) false else btbv
+                if (wasVerified) verified.remove(k)
                 core.addXmlLog(account.id, false,
-                    "OMEMO 2 identity changed for ${address.name}/${address.deviceId}; blind trust=$btbv")
+                    "OMEMO 2 identity changed for ${address.name}/${address.deviceId}; blind trust=$btbv, wasVerified=$wasVerified")
             }
             save()
             return changed
@@ -449,7 +455,7 @@ class Omemo2(
             if (trusted[k] == false) return false
             val old = identities[k]
             val btbv = core.settings.string("encryption.trust", "btbv") == "btbv"
-            if (old != null && !old.equals(identityKey) && !btbv) return false
+            if (old != null && !old.equals(identityKey) && (k in verified || !btbv)) return false
             if (btbv) return true
             return trusted[k] == true
         }
@@ -1036,8 +1042,10 @@ class Omemo2(
             if (includePayload) envelope(contentXml, toBare) else ByteArray(0)
         )
         val sb = StringBuilder("<encrypted xmlns='$NS'><header sid='$deviceId'>")
+        var encryptedKeys = 0
         for ((jid, list) in recipients) {
-            sb.append("<keys jid='").append(escape(jid)).append("'>")
+            val keysBuf = StringBuilder()
+            var recipientKeys = 0
             for (dev in list) {
                 val address = SignalProtocolAddress(jid, dev)
                 val cipher = SessionCipher(this, address).also { it.setVersion(VERSION) }
@@ -1047,11 +1055,16 @@ class Omemo2(
                 }
                 // We only know whether this was a key exchange after encrypting; the cipher stores it.
                 val kexAttr = if (msg.type == CiphertextMessage.PREKEY_TYPE) " kex='true'" else ""
-                sb.append("<key rid='").append(dev).append("'").append(kexAttr).append(">")
+                keysBuf.append("<key rid='").append(dev).append("'").append(kexAttr).append(">")
                     .append(b64(msg.serialize())).append("</key>")
+                recipientKeys++
+                encryptedKeys++
             }
-            sb.append("</keys>")
+            if (recipientKeys > 0) {
+                sb.append("<keys jid='").append(escape(jid)).append("'>").append(keysBuf).append("</keys>")
+            }
         }
+        if (encryptedKeys == 0) return@synchronized null
         sb.append("</header>")
         if (includePayload) sb.append("<payload>").append(b64(ct)).append("</payload>")
         sb.append("</encrypted>")
@@ -1132,8 +1145,9 @@ class Omemo2(
         val header = encrypted.getElements("header").firstOrNull()
             ?: return@synchronized decryptDom(msg, raw)
         val keys = header.getElements("keys")
-        val ours = keys.firstOrNull { it.getAttributeValue("jid")?.substringBefore('/') == account.jid }
-            ?: return@synchronized null
+        val ours = keys.firstOrNull {
+            it.getAttributeValue("jid")?.substringBefore('/')?.equals(account.jid, ignoreCase = true) == true
+        } ?: return@synchronized null
         val keyEl = ours.getElements("key").firstOrNull {
             it.getAttributeValue("rid")?.toIntOrNull() == deviceId
         } ?: return@synchronized null
@@ -1142,10 +1156,22 @@ class Omemo2(
         val kex = keyEl.getAttributeValue("kex") == "true" || keyEl.getAttributeValue("kex") == "1"
         val senderBare = msg.from?.asEntityBareJidIfPossible()?.toString() ?: account.jid
         // The sender's device id is in the <header sid>.
-        val senderDev = header?.getAttributeValue("sid")?.toIntOrNull() ?: 0
-        val address = SignalProtocolAddress(senderBare, senderDev)
+        val senderDev = header.getAttributeValue("sid")?.toIntOrNull() ?: 0
         val toJid = msg.to?.asEntityBareJidIfPossible()?.toString() ?: account.jid
-        try {
+        val payload = encrypted.getElements("payload").firstOrNull()?.text?.trim()
+        decryptKeyAndPayload(senderBare, senderDev, toJid, blob, kex, payload)
+    }
+
+    private fun decryptKeyAndPayload(
+        senderBare: String,
+        senderDev: Int,
+        toJid: String,
+        blob: ByteArray,
+        kex: Boolean,
+        payload: String?
+    ): Content? {
+        val address = SignalProtocolAddress(senderBare, senderDev)
+        return try {
             val cipher = SessionCipher(this, address).also { it.setVersion(VERSION) }
             var usedPreKey: Int? = null
             val keyMaterial = if (kex) {
@@ -1170,11 +1196,10 @@ class Omemo2(
                             "OMEMO 2 decrypt failed from $senderBare/$senderDev: " +
                                 "signal=${primary?.javaClass?.name}: ${primary?.message}; " +
                                 "keyExchange=${e2.javaClass.name}: ${e2.message}\n${e2.stackTraceToString()}")
-                        return@synchronized null
+                        return null
                     }
                 }
             }
-            val payload = encrypted.getElements("payload").firstOrNull()?.text?.trim()
             val trust = trustOf(address)
             val content = if (payload.isNullOrBlank()) {
                 Content("", senderDev, trust, emptyList(), true)
@@ -1234,7 +1259,7 @@ class Omemo2(
         val keys = enc.getElementsByTagNameNS(NS, "keys")
         for (i in 0 until keys.length) {
             val k = keys.item(i) as? Element ?: continue
-            if (k.getAttribute("jid").substringBefore('/') != account.jid) continue
+            if (!k.getAttribute("jid").substringBefore('/').equals(account.jid, ignoreCase = true)) continue
             val keyEls = k.getElementsByTagNameNS(NS, "key")
             for (j in 0 until keyEls.length) {
                 val ke = keyEls.item(j) as? Element ?: continue
@@ -1244,22 +1269,9 @@ class Omemo2(
                 val sid = (enc.getElementsByTagNameNS(NS, "header").item(0) as? Element)?.getAttribute("sid")?.toIntOrNull() ?: 0
                 val senderBare = msg.from?.asEntityBareJidIfPossible()?.toString() ?: account.jid
                 val toJid = msg.to?.asEntityBareJidIfPossible()?.toString() ?: account.jid
-                val address = SignalProtocolAddress(senderBare, sid)
-                return try {
-                    val cipher = SessionCipher(this, address).also { it.setVersion(VERSION) }
-                    val km = if (kex) cipher.decrypt(PreKeySignalMessage(blob, VERSION)) else cipher.decrypt(SignalMessage(blob, true))
-                    val payloadEl = enc.getElementsByTagNameNS(NS, "payload").item(0) as? Element
-                    val payload = payloadEl?.textContent?.trim()
-                    val trust = trustOf(address)
-                    if (payload.isNullOrBlank()) Content("", sid, trust, emptyList(), true)
-                    else {
-                        val (body, children) = parseEnvelope(String(decryptPayload(Base64.getDecoder().decode(payload), km), Charsets.UTF_8), senderBare, toJid)
-                        Content(body, sid, trust, children, false)
-                    }
-                } catch (e: Exception) {
-                    core.addXmlLog(account.id, true, "OMEMO 2 decrypt failed from $senderBare/$sid: ${e.stackTraceToString()}")
-                    null
-                }
+                val payloadEl = enc.getElementsByTagNameNS(NS, "payload").item(0) as? Element
+                val payload = payloadEl?.textContent?.trim()
+                return decryptKeyAndPayload(senderBare, sid, toJid, blob, kex, payload)
             }
         }
         return null
@@ -1268,20 +1280,26 @@ class Omemo2(
     private fun trustOf(address: SignalProtocolAddress): String {
         val id = getIdentity(address) ?: return "undecided"
         val fp = hex(id.publicKey.serializeEd())
-        val stored = runCatching {
-            kotlinx.coroutines.runBlocking(Dispatchers.IO) { core.dao.devicesOnce(account.id, address.name) }
-        }.getOrNull()?.firstOrNull { it.deviceId == address.deviceId.toLong() }
-        if (stored == null) {
-            if (core.settings.string("encryption.trust", "btbv") == "btbv") {
-                core.scope.launch(Dispatchers.IO) {
-                    runCatching { core.dao.insertDevice(DeviceEntity(account.id, address.name,
-                        address.deviceId.toLong(), fp, trust = "trusted", label = "OMEMO 2", protocol = "omemo2")) }
-                }
-                return "trusted"
+        val k = key(address)
+        if (k in verified) return "verified"
+        return when (trusted[k]) {
+            true -> "trusted"
+            false -> "distrusted"
+            null -> {
+                if (core.settings.string("encryption.trust", "btbv") == "btbv") {
+                    trusted[k] = true
+                    core.scope.launch(Dispatchers.IO) {
+                        runCatching {
+                            core.dao.insertDevice(
+                                DeviceEntity(account.id, address.name, address.deviceId.toLong(), fp,
+                                    trust = "trusted", label = "OMEMO 2", protocol = "omemo2")
+                            )
+                        }
+                    }
+                    "trusted"
+                } else "undecided"
             }
-            return "undecided"
         }
-        return stored.trust
     }
 
     private fun parseEnvelope(xml: String, from: String, to: String): Pair<String, List<org.jivesoftware.smack.packet.ExtensionElement>> {
@@ -1333,6 +1351,7 @@ class Omemo2(
             sessions.remove(prefix)
             identities.remove(prefix)
             trusted.remove(prefix)
+            verified.remove(prefix)
             disk.sessions.remove(prefix)
             disk.identities.remove(prefix)
             disk.trusted.remove(prefix)
@@ -1348,6 +1367,7 @@ class Omemo2(
             sessions.keys.removeIf { it.startsWith(prefix) }
             identities.keys.removeIf { it.startsWith(prefix) }
             trusted.keys.removeIf { it.startsWith(prefix) }
+            verified.removeIf { it.startsWith(prefix) }
             disk.sessions.keys.removeIf { it.startsWith(prefix) }
             disk.identities.keys.removeIf { it.startsWith(prefix) }
             disk.trusted.keys.removeIf { it.startsWith(prefix) }
@@ -1359,9 +1379,10 @@ class Omemo2(
         synchronized(lock) {
             val k = "$bareJid|$devId"
             when (trust) {
-                "trusted", "verified" -> trusted[k] = true
-                "distrusted" -> trusted[k] = false
-                else -> trusted.remove(k)
+                "verified" -> { trusted[k] = true; verified.add(k) }
+                "trusted" -> { trusted[k] = true; verified.remove(k) }
+                "distrusted" -> { trusted[k] = false; verified.remove(k) }
+                else -> { trusted.remove(k); verified.remove(k) }
             }
             save()
         }

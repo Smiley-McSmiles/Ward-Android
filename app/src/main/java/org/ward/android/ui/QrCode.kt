@@ -25,23 +25,35 @@ internal fun xmppQrBitmap(text: String, size: Int = 720): Bitmap {
         text, BarcodeFormat.QR_CODE, size, size,
         mapOf(EncodeHintType.MARGIN to 1)
     )
-    val bitmap = Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
-    for (x in 0 until matrix.width) {
-        for (y in 0 until matrix.height) {
-            bitmap.setPixel(x, y, if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-        }
+    val w = matrix.width
+    val h = matrix.height
+    val pixels = IntArray(w * h) { idx ->
+        val x = idx % w
+        val y = idx / w
+        if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
     }
-    return bitmap
+    return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+        setPixels(pixels, 0, w, 0, 0, w, h)
+    }
 }
 
 @Composable
 fun QrCodeImage(text: String, modifier: Modifier = Modifier) {
-    val bitmap = remember(text) { xmppQrBitmap(text) }
-    Image(
-        bitmap = bitmap.asImageBitmap(),
-        contentDescription = text,
-        modifier = modifier.clip(RoundedCornerShape(16.dp))
-    )
+    val bitmap by produceState<Bitmap?>(initialValue = null, text) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            xmppQrBitmap(text)
+        }
+    }
+    val ready = bitmap
+    if (ready != null) {
+        Image(
+            bitmap = ready.asImageBitmap(),
+            contentDescription = text,
+            modifier = modifier.clip(RoundedCornerShape(16.dp))
+        )
+    } else {
+        Box(modifier = modifier.clip(RoundedCornerShape(16.dp)))
+    }
 }
 
 @Composable

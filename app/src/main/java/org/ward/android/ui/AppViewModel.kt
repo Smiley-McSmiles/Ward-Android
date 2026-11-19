@@ -35,17 +35,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (id == null) flowOf(emptyList()) else core.dao.messages(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    var search = ""
-    var filter = "all"
-    var showArchived = false
-
     init {
         viewModelScope.launch {
             core.dao.chats().collect { list ->
-                if (_selectedChat.value != null && list.none { it.id == _selectedChat.value }) _selectedChat.value = null
+                if (_selectedChat.value != null && list.none { it.id == _selectedChat.value }) selectChat(null)
             }
         }
     }
+
+    private suspend fun activeChatOrLoad(): ChatEntity? =
+        selectedChatEntity.value ?: _selectedChat.value?.let { core.dao.chat(it) }
 
     fun selectChat(id: Long?) {
         _selectedChat.value = id
@@ -63,36 +62,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun send(text: String, replyTo: MessageEntity? = null) {
-        val chat = selectedChatEntity.value ?: return
         if (text.isBlank()) return
         viewModelScope.launch {
-            core.sendText(chat, text.trimEnd(), replyTo)
-            core.dao.setDraft(chat.id, "")
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching {
+                core.sendText(chat, text.trimEnd(), replyTo)
+                core.dao.setDraft(chat.id, "")
+            }
         }
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun sendFile(uri: Uri) {
-        val chat = selectedChatEntity.value ?: return
-        viewModelScope.launch { core.sendFile(chat, uri) }
+        viewModelScope.launch {
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching { core.sendFile(chat, uri) }
+        }
     }
 
     /** Upload several picked files in order, so their messages keep the picker's order. */
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun sendFiles(uris: List<Uri>) {
-        val chat = selectedChatEntity.value ?: return
         viewModelScope.launch {
-            for (uri in uris) core.sendFile(chat, uri)
+            val chat = activeChatOrLoad() ?: return@launch
+            for (uri in uris) runCatching { core.sendFile(chat, uri) }
         }
     }
 
     fun forward(target: ChatEntity, message: MessageEntity) {
-        viewModelScope.launch { core.forward(target, message) }
+        viewModelScope.launch { runCatching { core.forward(target, message) } }
     }
 
     fun setDraft(text: String) {
-        val chat = selectedChatEntity.value ?: return
-        viewModelScope.launch { core.setDraft(chat, text) }
+        viewModelScope.launch {
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching { core.setDraft(chat, text) }
+        }
     }
 
     fun typing(state: String) {
@@ -101,20 +106,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun react(msg: MessageEntity, emoji: String) {
-        val chat = selectedChatEntity.value ?: return
-        viewModelScope.launch { core.react(chat, msg, emoji) }
+        viewModelScope.launch {
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching { core.react(chat, msg, emoji) }
+        }
     }
     fun edit(msg: MessageEntity, text: String) {
-        val chat = selectedChatEntity.value ?: return
-        viewModelScope.launch { core.edit(chat, msg, text) }
+        viewModelScope.launch {
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching { core.edit(chat, msg, text) }
+        }
     }
     fun retract(msg: MessageEntity, everyone: Boolean) {
-        val chat = selectedChatEntity.value ?: return
-        viewModelScope.launch { core.retract(chat, msg, everyone) }
+        viewModelScope.launch {
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching { core.retract(chat, msg, everyone) }
+        }
     }
     fun markRead() {
-        val chat = selectedChatEntity.value ?: return
-        viewModelScope.launch { core.markRead(chat) }
+        viewModelScope.launch {
+            val chat = activeChatOrLoad() ?: return@launch
+            runCatching { core.markRead(chat) }
+        }
     }
 
     fun addAccount(jid: String, password: String, remember: Boolean, options: Map<String, String> = emptyMap(),

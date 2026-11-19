@@ -101,7 +101,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         @Volatile private var signalOmemoSetupDone = false
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var running = false
     @Volatile var connection: XMPPTCPConnection? = null
         private set
@@ -154,6 +154,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     fun start() {
         if (running) return
+        if (!scope.isActive) scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         running = true
         scope.launch { connectLoop() }
     }
@@ -169,6 +170,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         runCatching { connection?.disconnect() }
         connection = null
         rooms.clear()
+        scope.cancel()
         core.onState(account.id, ConnectionState("offline"))
     }
 
@@ -185,6 +187,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     delay(1000)
                 }
                 online = false
+                if (connection?.isDisconnectedButSmResumptionPossible() != true) {
+                    runCatching { connection?.disconnect() }
+                    connection = null
+                    sessionConfigured = false
+                }
                 // Keep the MultiUserChat objects while a resumed stream is possible: the server
                 // still considers us joined. They are cleared in afterLogin() if resumption fails
                 // and a full re-login has to rejoin the rooms.
@@ -221,22 +228,45 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
 
+    private fun certFingerprint(cert: java.security.cert.Certificate): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+            .joinToString(":") { "%02X".format(it) }
+
+    private fun systemTrustManager(): javax.net.ssl.X509TrustManager? = runCatching {
+        val tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+            javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+        )
+        tmf.init(null as java.security.KeyStore?)
+        tmf.trustManagers.filterIsInstance<javax.net.ssl.X509TrustManager>().firstOrNull()
+    }.getOrNull()
+
     private fun tofuTrustManager(): javax.net.ssl.X509TrustManager {
+        val systemTm = systemTrustManager()
         return object : javax.net.ssl.X509TrustManager {
             override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
             override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {
                 if (chain.isNullOrEmpty()) throw java.security.cert.CertificateException("No certificate")
-                val fp = java.security.MessageDigest.getInstance("SHA-256").digest(chain[0].encoded)
-                    .joinToString(":") { "%02X".format(it) }
+                chain[0].checkValidity()
+                val fp = certFingerprint(chain[0])
+                val caTrusted = runCatching {
+                    systemTm?.checkServerTrusted(chain, authType)
+                    systemTm != null
+                }.getOrDefault(false)
                 val key = "certificate.pin.${account.id}"
                 val saved = core.settings.string(key, "")
-                if (saved.isBlank()) core.settings.setString(key, fp)
-                else if (!saved.equals(fp, ignoreCase = true)) {
-                    throw java.security.cert.CertificateException("The server's certificate changed. Clear the app data for this account or verify the new fingerprint in the XML console.")
+                if (!caTrusted) {
+                    if (saved.isBlank()) core.settings.setString(key, fp)
+                    else if (!saved.equals(fp, ignoreCase = true)) {
+                        throw java.security.cert.CertificateException("The server's certificate changed. Clear the app data for this account or verify the new fingerprint in the XML console.")
+                    }
+                } else if (saved.isNotBlank() && !saved.equals(fp, ignoreCase = true)) {
+                    // Update pin when a CA-trusted cert rotates normally.
+                    core.settings.setString(key, fp)
                 }
-                core.addXmlLog(account.id, false, "server certificate SHA-256 $fp")
+                core.addXmlLog(account.id, false, "server certificate SHA-256 $fp (ca=$caTrusted)")
             }
-            override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
+            override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> =
+                systemTm?.acceptedIssuers ?: emptyArray()
         }
     }
 
@@ -251,11 +281,16 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             .setConnectTimeout(30_000)
             .setSecurityMode(ConnectionConfiguration.SecurityMode.required)
         builder.setCustomX509TrustManager(tofuTrustManager())
-        builder.setHostnameVerifier { _, _ -> true }
+        builder.setHostnameVerifier { hostname, session ->
+            val defaultVerifier = javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier()
+            if (defaultVerifier.verify(hostname, session)) return@setHostnameVerifier true
+            val peer = runCatching { session.peerCertificates.firstOrNull() }.getOrNull() ?: return@setHostnameVerifier false
+            val saved = core.settings.string("certificate.pin.${account.id}", "")
+            saved.isNotBlank() && saved.equals(certFingerprint(peer), ignoreCase = true)
+        }
         val host = opt("host")
         if (host.isNotBlank()) builder.setHost(host).setPort(opt("port", "5222").toIntOrNull() ?: 5222)
-        else if (opt("port").isNotBlank()) builder.setPort(opt("port").toInt())
-        builder.setResource(opt("resource", "Ward Android").ifBlank { "Ward Android" })
+        else opt("port").toIntOrNull()?.let { builder.setPort(it) }
         val conn = WardXmppConnection(builder.build()) { message ->
             core.addXmlLog(account.id, true, message)
         }
@@ -1126,7 +1161,9 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         val ext = msg.ext("openpgp", Ns.OPENPGP) ?: return
         val from = msg.from?.asEntityBareJidIfPossible()?.toString() ?: return
         val secret = OpenPgp.loadSecret(core, account.id) ?: return
-        val certs = core.dao.pgpKeysNow(account.id, from).mapNotNull { OpenPgp.parsePublic(it.armored) }
+        val certs = core.dao.pgpKeysNow(account.id, from)
+            .filter { it.trust != "distrusted" }
+            .mapNotNull { OpenPgp.parsePublic(it.armored) }
         val decrypted = runCatching {
             val raw = android.util.Base64.decode(ext.text?.trim(), android.util.Base64.DEFAULT)
             OpenPgp.decrypt(secret, certs, raw)
@@ -1140,7 +1177,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
             val id = core.dao.insertMessage(e); if (id >= 0) core.touchChat(chat, e.copy(id = id), outgoing = false)
             return
         }
-        val body = OpenPgp.parseSigncrypt(String(decrypted), account.jid)
+        val body = OpenPgp.parseSigncrypt(String(decrypted), account.jid, from)
         if (body == null) {
             val chat = core.ensureChat(account.id, from, "chat")
             val e = MessageEntity(chatId = chat.id, stanzaId = msg.stanzaId ?: JidUtil.randomId(),
@@ -1302,7 +1339,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private fun setupMuc(muc: MultiUserChat, chat: ChatEntity) {
         muc.addMessageListener { msg ->
             core.addXmlLog(account.id, true, msg.toXML(XmlEnvironment.EMPTY).toString())
-            val enc = msg.getExtensionElement("encrypted", Ns.OMEMO) != null || msg.getExtensionElement("envelope", Ns.OMEMO2) != null
+            val enc = msg.getExtensionElement("encrypted", Ns.OMEMO) != null || msg.getExtensionElement("encrypted", Ns.OMEMO2) != null
             if (!enc) processGroupMessage(muc, msg)
         }
         muc.addSubjectUpdatedListener { subject, from ->
@@ -1629,7 +1666,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     private fun buildBaseMessage(chat: ChatEntity, entity: MessageEntity, payload: EncryptedPayload?): Message {
-        val id = entity.stanzaId.ifBlank { JidUtil.randomId() }
+        val id = entity.stanzaId.orEmpty().ifBlank { JidUtil.randomId() }
         val builder = StanzaBuilder.buildMessage(id)
         try { builder.to(chat.jid) } catch (_: XmppStringprepException) {}
         builder.ofType(if (chat.isGroup) Message.Type.groupchat else Message.Type.chat)
@@ -1718,7 +1755,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                     org.pgpainless.PGPainless.inspectKeyRing(it).fingerprint.toString()
                 }
             if (certs.size <= 1) throw IllegalStateException("${chat.displayName} has no OpenPGP key. Ask them to publish one from Ward.")
-            val signcrypt = OpenPgp.signcryptXml(entity.body, chat.jid)
+            val signcrypt = OpenPgp.signcryptXml(entity.body, chat.jid, account.jid)
             val data = OpenPgp.encrypt(secret, certs, signcrypt.toByteArray())
             return EncryptedPayload.Pgp(android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP))
         }
@@ -1800,7 +1837,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     fun sendDisplayed(chat: ChatEntity, entity: MessageEntity) {
-        val ref = if (chat.isGroup) entity.stanzaId else entity.msgId.ifBlank { entity.stanzaId }
+        val ref = if (chat.isGroup) entity.stanzaId.orEmpty() else entity.msgId.ifBlank { entity.stanzaId.orEmpty() }
         if (ref.isBlank()) return
         scope.launch {
             runCatching {
@@ -1833,7 +1870,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     fun sendReaction(chat: ChatEntity, entity: MessageEntity, emojis: List<String>) {
-        val target = if (chat.isGroup) entity.stanzaId else entity.originId.ifBlank { entity.msgId }
+        val target = if (chat.isGroup) entity.stanzaId.orEmpty() else entity.originId.ifBlank { entity.msgId }
         if (target.isBlank()) return
         scope.launch {
             runCatching {
@@ -1873,7 +1910,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     fun sendRetraction(chat: ChatEntity, entity: MessageEntity) {
-        val target = if (chat.isGroup) (entity.stanzaId.ifBlank { entity.originId }) else (entity.originId.ifBlank { entity.msgId })
+        val target = if (chat.isGroup) (entity.stanzaId.orEmpty().ifBlank { entity.originId }) else (entity.originId.ifBlank { entity.msgId })
         scope.launch {
             runCatching {
                 val content = "<retract xmlns='" + Ns.RETRACT + "' id='" + xmlEscape(target) + "'/>"
@@ -1898,7 +1935,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
 
     /** XEP-0425: ask the room service to retract a message sent by someone else. */
     suspend fun moderateMessage(chat: ChatEntity, entity: MessageEntity): Boolean {
-        val target = entity.stanzaId.ifBlank { entity.originId }
+        val target = entity.stanzaId.orEmpty().ifBlank { entity.originId }
         if (target.isBlank()) return false
         val conn = connection ?: return false
         suspend fun send(legacy: Boolean): Boolean {
@@ -1930,7 +1967,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     private suspend fun flushOutbox() {
         val chats = core.dao.chatsNow()
         for (chat in chats) {
-            val msgs = core.dao.messagesNow(chat.id, 500).filter { it.direction == 1 && it.status == 0 }
+            val msgs = core.dao.messagesNow(chat.id, 500).reversed().filter { it.direction == 1 && it.status == 0 }
             for (m in msgs) if (chat.isGroup && rooms[chat.jid]?.isJoined == true || !chat.isGroup) sendChatNow(chat, m)
         }
     }
@@ -2225,9 +2262,11 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         }
     }
     fun acceptSubscription(jid: String) {
-        scope.launch { runCatching { roster?.let { Roster.getInstanceFor(connection!!) }
-            val p = Presence(Presence.Type.subscribed); p.to = JidCreate.from(jid); connection?.sendStanza(p)
-            val pp = Presence(Presence.Type.subscribe); pp.to = JidCreate.from(jid); connection?.sendStanza(pp)
+        scope.launch { runCatching {
+            val conn = connection ?: return@runCatching
+            roster?.let { Roster.getInstanceFor(conn) }
+            val p = Presence(Presence.Type.subscribed); p.to = JidCreate.from(jid); conn.sendStanza(p)
+            val pp = Presence(Presence.Type.subscribe); pp.to = JidCreate.from(jid); conn.sendStanza(pp)
         } }
     }
     fun declineSubscription(jid: String) {
@@ -2271,7 +2310,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
                         runCatching { mgr.isDecidedOmemoIdentity(device, fp) }.getOrDefault(false) -> "distrusted"
                         else -> "undecided"
                     }
-                    runBlocking(Dispatchers.IO) {
+                    withContext(Dispatchers.IO) {
                         core.dao.insertDevice(DeviceEntity(account.id, jid, device.deviceId.toLong(), fp.toString(),
                             label = if (device.deviceId == mgr.ownDevice.deviceId) "This device" else "",
                             trust = trust, own = jid == account.jid, thisDevice = jid == account.jid && device.deviceId == mgr.ownDevice.deviceId))
@@ -2283,7 +2322,7 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
         if (o2 != null) {
             runCatching {
                 for ((dev, fp) in o2.loadDeviceInfo(jid)) {
-                    runBlocking(Dispatchers.IO) {
+                    withContext(Dispatchers.IO) {
                         val old = core.dao.devicesOnce(account.id, jid)
                             .firstOrNull { it.deviceId == dev.toLong() && it.protocol == "omemo2" }
                         val thisDevice = jid == account.jid && dev == o2.deviceId
@@ -2419,13 +2458,13 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     fun trustDevice(jid: String, deviceId: Long, fingerprint: String, trusted: Boolean, protocol: String = "omemo") {
         if (protocol == "omemo2") {
             scope.launch(Dispatchers.IO) {
-                omemo2?.rememberTrust(jid, deviceId.toInt(), if (trusted) "trusted" else "distrusted")
+                omemo2?.rememberTrust(jid, deviceId.toInt(), if (trusted) "verified" else "distrusted")
                 runCatching { core.dao.setTrust(account.id, jid, deviceId, "omemo2", if (trusted) "verified" else "distrusted") }
             }
             return
         }
         val mgr = omemo ?: return
-        runBlocking(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             runCatching {
                 val device = OmemoDevice(JidCreate.entityBareFrom(jid), deviceId.toInt())
                 val fp = OmemoFingerprint(fingerprint)
@@ -2706,8 +2745,15 @@ class XmppSession(internal val core: WardCore, var account: AccountEntity, priva
     }
 
     private fun parseXml(xml: String): org.w3c.dom.Document {
-        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
-        factory.isNamespaceAware = true
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            isXIncludeAware = false
+            isExpandEntityReferences = false
+        }
         return factory.newDocumentBuilder().parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
     }
 

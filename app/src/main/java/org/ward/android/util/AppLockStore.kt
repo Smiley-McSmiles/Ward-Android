@@ -126,21 +126,28 @@ object AppLockStore {
         val attempts = p.getInt(KEY_FAILED, 0) + 1
         val max = maxAttempts(context)
         val wipe = max > 0 && attempts >= max
-        val lockoutUntil = if (lockoutSeconds(context) > 0)
-            System.currentTimeMillis() + lockoutSeconds(context) * 1000L else 0L
+        val lockoutSec = lockoutSeconds(context)
+        val lockoutUntil = if (lockoutSec > 0)
+            SystemClock.elapsedRealtime() + lockoutSec * 1000L else 0L
         p.edit()
             .putInt(KEY_FAILED, attempts)
             .putLong(KEY_LOCKOUT_UNTIL, lockoutUntil)
-            .apply()
+            .commit()
         return Failure(attempts, wipe, lockoutUntil)
     }
 
     fun clearFailures(context: Context) {
-        prefs(context).edit().putInt(KEY_FAILED, 0).putLong(KEY_LOCKOUT_UNTIL, 0L).apply()
+        prefs(context).edit().putInt(KEY_FAILED, 0).putLong(KEY_LOCKOUT_UNTIL, 0L).commit()
     }
 
-    fun lockoutRemaining(context: Context): Long =
-        (prefs(context).getLong(KEY_LOCKOUT_UNTIL, 0L) - System.currentTimeMillis()).coerceAtLeast(0L)
+    fun lockoutRemaining(context: Context): Long {
+        val until = prefs(context).getLong(KEY_LOCKOUT_UNTIL, 0L)
+        if (until <= 0L) return 0L
+        val maxLockout = lockoutSeconds(context) * 1000L
+        if (maxLockout <= 0L) return 0L
+        val now = SystemClock.elapsedRealtime()
+        return if (until <= now) 0L else (until - now).coerceAtMost(maxLockout)
+    }
 
     fun failedAttempts(context: Context): Int = prefs(context).getInt(KEY_FAILED, 0)
 

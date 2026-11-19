@@ -172,7 +172,12 @@ fun ChatScreen(vm: AppViewModel) {
     var pending by remember(c.id) { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         AppLockStore.endExternalActivity()
-        if (uris.isNotEmpty()) pending = pending + uris.mapNotNull { pendingAttachment(context, it) }
+        if (uris.isNotEmpty()) {
+            scope.launch {
+                val items = withContext(Dispatchers.IO) { uris.mapNotNull { pendingAttachment(context, it) } }
+                pending = pending + items
+            }
+        }
     }
     var attachMenu by remember { mutableStateOf(false) }
     var gifPicker by remember { mutableStateOf(false) }
@@ -202,7 +207,6 @@ fun ChatScreen(vm: AppViewModel) {
     }
 
     fun launchCamera(video: Boolean) {
-        AppLockStore.beginExternalActivity()
         val extension = if (video) "mp4" else "jpg"
         val file = File(context.cacheDir, "camera-${System.currentTimeMillis()}.$extension")
         val uri = runCatching {
@@ -216,8 +220,10 @@ fun ChatScreen(vm: AppViewModel) {
         }
         pendingCameraUri = uri
         pendingCameraFile = file
+        AppLockStore.beginExternalActivity()
         runCatching { if (video) captureVideo.launch(uri) else takePicture.launch(uri) }
             .onFailure {
+                AppLockStore.endExternalActivity()
                 pendingCameraUri = null
                 pendingCameraFile = null
                 file.delete()
@@ -407,7 +413,13 @@ fun ChatScreen(vm: AppViewModel) {
 
     var pendingVideoCall by remember { mutableStateOf(false) }
     val callPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        vm.core.session(c.accountId)?.call?.start(c, pendingVideoCall)
+        val micOk = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val camOk = !pendingVideoCall || androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (micOk && camOk) {
+            vm.core.session(c.accountId)?.call?.start(c, pendingVideoCall)
+        } else {
+            android.widget.Toast.makeText(context, "Microphone/camera permission required for calls", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
     fun startCall(video: Boolean) {
         pendingVideoCall = video
@@ -483,7 +495,9 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
     }
-    val filtered = if (search.isBlank()) messages else messages.filter { it.body.contains(search, true) }
+    val filtered = remember(messages, search) {
+        if (search.isBlank()) messages else messages.filter { it.body.contains(search, true) }
+    }
     // Keep the newest message above the floating composer when its height changes (keyboard,
     // voice recorder, attachment menu).
     LaunchedEffect(composerHeightPx) {
@@ -868,7 +882,7 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
     val context = LocalContext.current
     val grouping = prev != null && prev.direction == m.direction && prev.senderJid == m.senderJid &&
         prev.attachmentsJson == "[]" && m.timestamp - prev.timestamp < 5 * 60_000 && prev.retracted == 0
-    val reactions = parseReactions(m.reactionsJson)
+    val reactions = remember(m.reactionsJson) { parseReactions(m.reactionsJson) }
     val layout = vm.settings.string("appearance.layout", "cozy")
     val compact = layout == "compact"
     val avatarMode = vm.settings.string("appearance.avatars", "always")
@@ -964,8 +978,10 @@ fun MessageItemRow(vm: AppViewModel, chat: ChatEntity, m: MessageEntity, prev: M
                             fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                     } else {
-                        val atype = object : com.google.gson.reflect.TypeToken<List<Map<String, Any>>>() {}.type
-                        val atts: List<Map<String, Any>> = vm.core.gson.fromJson(m.attachmentsJson, atype) ?: emptyList()
+                        val atts: List<Map<String, Any>> = remember(m.attachmentsJson) {
+                            val atype = object : com.google.gson.reflect.TypeToken<List<Map<String, Any>>>() {}.type
+                            vm.core.gson.fromJson(m.attachmentsJson, atype) ?: emptyList()
+                        }
                         for (a in atts) {
                             AttachmentView(vm, a)
                             Spacer(Modifier.height(4.dp))
@@ -1564,7 +1580,7 @@ private fun WheelPicker(values: List<Int>, initial: Int, label: String,
             LazyColumn(state = state, flingBehavior = fling,
                 contentPadding = PaddingValues(vertical = itemHeight),
                 modifier = Modifier.fillMaxSize()) {
-                items(values.size) { index ->
+                items(values.size, key = { values[it] }) { index ->
                     Box(Modifier.fillMaxWidth().height(itemHeight), contentAlignment = Alignment.Center) {
                         Text(values[index].toString().padStart(2, '0'),
                             style = MaterialTheme.typography.titleMedium,
@@ -1698,7 +1714,7 @@ private fun TenorGifSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        items(gifs.size) { index ->
+                        items(gifs.size, key = { gifs[it] }) { index ->
                             AsyncImage(model = gifs[index], contentDescription = "GIF",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.aspectRatio(1f)
@@ -1791,7 +1807,7 @@ private fun MessageDetailsDialog(chat: ChatEntity, msg: MessageEntity, onDismiss
                 if (msg.trust.isNotBlank()) DetailRow("Trust", msg.trust.replaceFirstChar { it.uppercase() }, ::copy)
                 DetailRow("Time", time, ::copy)
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                DetailRow("Server id", msg.stanzaId.ifBlank { "—" }, ::copy)
+                DetailRow("Server id", msg.stanzaId.orEmpty().ifBlank { "—" }, ::copy)
                 DetailRow("Origin id", msg.originId.ifBlank { "—" }, ::copy)
                 DetailRow("Message id", msg.msgId.ifBlank { "—" }, ::copy)
                 if (chat.isGroup && msg.occupantId.isNotBlank()) DetailRow("Occupant id", msg.occupantId, ::copy)
@@ -1923,6 +1939,8 @@ private fun EmojiPickerDialog(vm: AppViewModel, title: String = "Choose a reacti
                             }
                         }
                         Spacer(Modifier.height(8.dp))
+                        val currentTone by rememberUpdatedState(tone)
+                        val currentOnPick by rememberUpdatedState(onPick)
                         AndroidView(
                             factory = { ctx ->
                                 val themed = android.view.ContextThemeWrapper(ctx,
@@ -1931,7 +1949,7 @@ private fun EmojiPickerDialog(vm: AppViewModel, title: String = "Choose a reacti
                                 androidx.emoji2.emojipicker.EmojiPickerView(themed).apply {
                                     emojiGridColumns = 8
                                     setOnEmojiPickedListener { item ->
-                                        onPick(applySkinTone(item.emoji, tone))
+                                        currentOnPick(applySkinTone(item.emoji, currentTone))
                                     }
                                 }
                             },
@@ -2011,11 +2029,11 @@ private fun SheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, l
 @Composable
 fun ChatDetailsSheet(vm: AppViewModel, chat: ChatEntity, contact: ContactEntity?, onDismiss: () -> Unit, onMembers: () -> Unit, onDevices: () -> Unit) {
     val accounts by vm.accounts.collectAsState()
-    var topic by remember { mutableStateOf(chat.subject) }
-    var inviteOpen by remember { mutableStateOf(false) }
-    var inviteJid by remember { mutableStateOf("") }
-    var notify by remember { mutableStateOf(chat.notify) }
-    var encryption by remember { mutableStateOf(if (chat.encryption == "omemo") "default" else chat.encryption) }
+    var topic by remember(chat.id) { mutableStateOf(chat.subject) }
+    var inviteOpen by remember(chat.id) { mutableStateOf(false) }
+    var inviteJid by remember(chat.id) { mutableStateOf("") }
+    var notify by remember(chat.id) { mutableStateOf(chat.notify) }
+    var encryption by remember(chat.id) { mutableStateOf(if (chat.encryption == "omemo") "default" else chat.encryption) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

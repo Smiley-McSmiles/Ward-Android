@@ -1,6 +1,7 @@
 package org.ward.android.data
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -23,7 +24,11 @@ data class AccountEntity(
     val displayName: String get() = label.ifBlank { nickname.ifBlank { jid } }
 }
 
-@Entity(tableName = "contacts", primaryKeys = ["accountId", "jid"])
+@Entity(
+    tableName = "contacts",
+    primaryKeys = ["accountId", "jid"],
+    foreignKeys = [ForeignKey(entity = AccountEntity::class, parentColumns = ["id"], childColumns = ["accountId"], onDelete = ForeignKey.CASCADE)]
+)
 data class ContactEntity(
     val accountId: Long,
     val jid: String,
@@ -43,7 +48,11 @@ data class ContactEntity(
     val name: String get() = nickname.ifBlank { rosterName.ifBlank { jid.substringBefore('@') } }
 }
 
-@Entity(tableName = "chats", indices = [Index(value = ["accountId", "jid"], unique = true)])
+@Entity(
+    tableName = "chats",
+    indices = [Index(value = ["accountId", "jid"], unique = true)],
+    foreignKeys = [ForeignKey(entity = AccountEntity::class, parentColumns = ["id"], childColumns = ["accountId"], onDelete = ForeignKey.CASCADE)]
+)
 data class ChatEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val accountId: Long,
@@ -79,11 +88,15 @@ data class ChatEntity(
     val displayName: String get() = name.ifBlank { jid }
 }
 
-@Entity(tableName = "messages", indices = [Index(value = ["chatId", "stanzaId"], unique = true), Index("chatId"), Index("timestamp")])
+@Entity(
+    tableName = "messages",
+    indices = [Index(value = ["chatId", "stanzaId"], unique = true), Index("chatId"), Index("timestamp")],
+    foreignKeys = [ForeignKey(entity = ChatEntity::class, parentColumns = ["id"], childColumns = ["chatId"], onDelete = ForeignKey.CASCADE)]
+)
 data class MessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val chatId: Long,
-    val stanzaId: String = "",
+    val stanzaId: String? = null,
     val originId: String = "",
     val msgId: String = "",
     val sender: String = "",
@@ -111,7 +124,11 @@ data class MessageEntity(
     val rawJson: String = ""
 )
 
-@Entity(tableName = "devices", primaryKeys = ["accountId", "jid", "deviceId", "protocol"])
+@Entity(
+    tableName = "devices",
+    primaryKeys = ["accountId", "jid", "deviceId", "protocol"],
+    foreignKeys = [ForeignKey(entity = AccountEntity::class, parentColumns = ["id"], childColumns = ["accountId"], onDelete = ForeignKey.CASCADE)]
+)
 data class DeviceEntity(
     val accountId: Long,
     val jid: String,
@@ -129,7 +146,11 @@ data class DeviceEntity(
     val protocol: String = "omemo"
 )
 
-@Entity(tableName = "receipts", primaryKeys = ["messageId", "recipient"])
+@Entity(
+    tableName = "receipts",
+    primaryKeys = ["messageId", "recipient"],
+    foreignKeys = [ForeignKey(entity = MessageEntity::class, parentColumns = ["id"], childColumns = ["messageId"], onDelete = ForeignKey.CASCADE)]
+)
 data class ReceiptEntity(
     val messageId: Long,
     val recipient: String,
@@ -137,7 +158,11 @@ data class ReceiptEntity(
     val displayedAt: Long = 0
 )
 
-@Entity(tableName = "requests", primaryKeys = ["accountId", "jid"])
+@Entity(
+    tableName = "requests",
+    primaryKeys = ["accountId", "jid"],
+    foreignKeys = [ForeignKey(entity = AccountEntity::class, parentColumns = ["id"], childColumns = ["accountId"], onDelete = ForeignKey.CASCADE)]
+)
 data class RequestEntity(
     val accountId: Long,
     val jid: String,
@@ -147,7 +172,11 @@ data class RequestEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "pgp_keys", primaryKeys = ["accountId", "jid", "fingerprint"])
+@Entity(
+    tableName = "pgp_keys",
+    primaryKeys = ["accountId", "jid", "fingerprint"],
+    foreignKeys = [ForeignKey(entity = AccountEntity::class, parentColumns = ["id"], childColumns = ["accountId"], onDelete = ForeignKey.CASCADE)]
+)
 data class PgpKeyEntity(
     val accountId: Long,
     val jid: String,

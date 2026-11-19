@@ -37,6 +37,8 @@ fun SwipeBack(onBack: () -> Unit, enterFromRight: Boolean = false,
     LaunchedEffect(enterFromRight, maxSwipe) {
         if (enterFromRight && offsetPx > 0f) {
             animate(offsetPx, 0f, animationSpec = tween(240)) { value, _ -> offsetPx = value }
+        } else if (!enterFromRight && offsetPx != 0f) {
+            offsetPx = 0f
         }
     }
     Box(

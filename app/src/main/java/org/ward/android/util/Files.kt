@@ -1,7 +1,6 @@
 package org.ward.android.util
 
 import java.io.File
-import java.net.URL
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -38,16 +37,21 @@ object FileCrypto {
         require(size >= TAG) { "encrypted file is too short" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-        src.inputStream().use { input ->
-            dst.outputStream().use { output ->
-                val buf = ByteArray(CHUNK)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    output.write(cipher.update(buf, 0, n))
+        try {
+            src.inputStream().use { input ->
+                dst.outputStream().use { output ->
+                    val buf = ByteArray(CHUNK)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        output.write(cipher.update(buf, 0, n))
+                    }
+                    output.write(cipher.doFinal())
                 }
-                output.write(cipher.doFinal())
             }
+        } catch (t: Throwable) {
+            dst.delete()
+            throw t
         }
     }
 
@@ -71,8 +75,21 @@ object FileCrypto {
         }
     }
 
-    fun cacheName(url: String, name: String): String =
-        MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) } + "-" + name.replace('/', '_')
+    fun cacheName(url: String, name: String): String {
+        val prefix = MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) } + "-"
+        val clean = name.replace(Regex("[\\\\/\\u0000]"), "_")
+        val maxTail = 255 - prefix.length - 10 // leave room for .download / .part
+        val safeName = if (clean.length <= maxTail) clean else {
+            val dot = clean.lastIndexOf('.')
+            if (dot > 0 && clean.length - dot <= 16) {
+                val ext = clean.substring(dot)
+                clean.substring(0, (maxTail - ext.length).coerceAtLeast(1)) + ext
+            } else {
+                clean.substring(0, maxTail)
+            }
+        }
+        return prefix + safeName
+    }
 
     /**
      * Whether a file in the attachment cache is a finished download for [url]. In-progress

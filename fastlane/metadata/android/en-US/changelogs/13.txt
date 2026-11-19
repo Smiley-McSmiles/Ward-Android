@@ -1,0 +1,1 @@
+Security, encryption, calling, database, and UI reliability update: enforces TLS cert validity and hostname verification for CA-signed servers, OpenPGP signature verification, OMEMO 2 verified-key protection and MUC filtering, hardened app lock, WebRTC/Jingle concurrency fixes, Room v6 cascade schema, and smoother Compose rendering.

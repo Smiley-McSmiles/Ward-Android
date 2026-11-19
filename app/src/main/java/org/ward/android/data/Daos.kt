@@ -34,7 +34,7 @@ interface WardDao {
     @Query("UPDATE chats SET draft=:draft WHERE id=:id") suspend fun setDraft(id: Long, draft: String)
 
     @Query("SELECT * FROM messages WHERE chatId=:chatId ORDER BY timestamp ASC, id ASC") fun messages(chatId: Long): Flow<List<MessageEntity>>
-    @Query("SELECT * FROM messages WHERE chatId=:chatId ORDER BY timestamp ASC, id ASC LIMIT :limit") suspend fun messagesNow(chatId: Long, limit: Int = 500): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE chatId=:chatId ORDER BY timestamp DESC, id DESC LIMIT :limit") suspend fun messagesNow(chatId: Long, limit: Int = 500): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE chatId=:chatId ORDER BY timestamp DESC, id DESC LIMIT 1") suspend fun lastMessage(chatId: Long): MessageEntity?
     @Query("SELECT * FROM messages WHERE id=:id") suspend fun message(id: Long): MessageEntity?
     @Query("SELECT * FROM messages WHERE chatId=:chatId AND (stanzaId=:ref OR originId=:ref) LIMIT 1") suspend fun findByRef(chatId: Long, ref: String): MessageEntity?
@@ -54,8 +54,15 @@ interface WardDao {
     @Query("DELETE FROM chats WHERE accountId=:accountId AND jid=:jid") suspend fun deleteChatForJid(accountId: Long, jid: String)
 
     @Query("DELETE FROM messages WHERE id=:id") suspend fun deleteMessage(id: Long)
-    @Query("SELECT * FROM messages WHERE chatId=:chatId AND body LIKE '%'||:q||'%' ORDER BY timestamp DESC LIMIT 200") suspend fun search(chatId: Long, q: String): List<MessageEntity>
-    @Query("SELECT * FROM messages WHERE body LIKE '%'||:q||'%' ORDER BY timestamp DESC LIMIT 200") suspend fun searchAll(q: String): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE chatId=:chatId AND body LIKE '%'||:escaped||'%' ESCAPE '\\' ORDER BY timestamp DESC LIMIT 200")
+    suspend fun searchEscaped(chatId: Long, escaped: String): List<MessageEntity>
+    suspend fun search(chatId: Long, q: String): List<MessageEntity> =
+        searchEscaped(chatId, q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+
+    @Query("SELECT * FROM messages WHERE body LIKE '%'||:escaped||'%' ESCAPE '\\' ORDER BY timestamp DESC LIMIT 200")
+    suspend fun searchAllEscaped(escaped: String): List<MessageEntity>
+    suspend fun searchAll(q: String): List<MessageEntity> =
+        searchAllEscaped(q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
 
     @Query("SELECT * FROM devices WHERE accountId=:accountId AND jid=:jid ORDER BY deviceId") fun devices(accountId: Long, jid: String): Flow<List<DeviceEntity>>
     @Query("SELECT * FROM devices WHERE accountId=:accountId AND jid=:jid ORDER BY deviceId") suspend fun devicesOnce(accountId: Long, jid: String): List<DeviceEntity>
